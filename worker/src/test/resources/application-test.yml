@@ -1,0 +1,7 @@
+# Testcontainers supplies the real connection details; this only satisfies the placeholder.
+spring:
+  datasource:
+    password: test
+  # The api module owns the schema. Apply its migrations so tests run against the real tables.
+  flyway:
+    locations: filesystem:../api/src/main/resources/db/migration

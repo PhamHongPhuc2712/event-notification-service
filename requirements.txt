@@ -1,0 +1,2 @@
+# Python helper scripts (load-test verifier, data tools).
+# The Java services do not use this file.

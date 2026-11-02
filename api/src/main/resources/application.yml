@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: api
+  # Local secrets live in infra/.env (gitignored). The path depends on the working directory.
+  config:
+    import: optional:file:./infra/.env[.properties],optional:file:../infra/.env[.properties]
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:notifications}
+    username: ${POSTGRES_USER:notifications}
+    password: ${POSTGRES_PASSWORD}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      # Keep every producer timeout inside notifications.outbox.send-timeout. Otherwise a batch
+      # that timed out would still be sent later and then sent again by the next poll.
+      properties:
+        enable.idempotence: true
+        max.block.ms: 3000
+        request.timeout.ms: 3000
+        delivery.timeout.ms: 8000
+
+server:
+  port: ${SERVER_PORT:8080}
+
+notifications:
+  topics:
+    email: notifications.email
+    partitions: 6
+  outbox:
+    poll-interval: 200ms
+    batch-size: 100
+    send-timeout: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}

@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: worker
+  # Local secrets live in infra/.env (gitignored). The path depends on the working directory.
+  config:
+    import: optional:file:./infra/.env[.properties],optional:file:../infra/.env[.properties]
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:notifications}
+    username: ${POSTGRES_USER:notifications}
+    password: ${POSTGRES_PASSWORD}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # Offsets are committed only after the listener returns for the whole poll batch.
+      ack-mode: batch
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+
+server:
+  port: ${SERVER_PORT:8081}
+
+notifications:
+  topics:
+    email: notifications.email
+  consumer:
+    email-group: email-worker
+    concurrency: 3
+  mail:
+    from: no-reply@event-notification.local
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}

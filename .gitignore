@@ -1,0 +1,28 @@
+# Build output
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+
+# Local secrets and env files
+.env
+*.env
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Load-test output
+loadtest/results/
+
+# Python virtual environment
+.venv/
+__pycache__/

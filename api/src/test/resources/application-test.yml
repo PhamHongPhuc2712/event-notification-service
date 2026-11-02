@@ -1,0 +1,8 @@
+# Testcontainers supplies the real connection details; this only satisfies the placeholder.
+spring:
+  datasource:
+    password: test
+
+notifications:
+  outbox:
+    poll-interval: 50ms

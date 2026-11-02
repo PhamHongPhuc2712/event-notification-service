@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: notification-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - host.docker.internal:8080   # api
+          - host.docker.internal:8081   # worker
+          - host.docker.internal:8082   # mock-sms
