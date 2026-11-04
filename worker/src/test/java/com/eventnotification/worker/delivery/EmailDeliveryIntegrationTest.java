@@ -1,6 +1,7 @@
 package com.eventnotification.worker.delivery;
 
 import com.eventnotification.worker.TestcontainersConfiguration;
+import com.eventnotification.worker.TopicReader;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -9,6 +10,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.kafka.KafkaContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -43,6 +45,9 @@ class EmailDeliveryIntegrationTest {
 
     @Autowired
     private GenericContainer<?> mailpit;
+
+    @Autowired
+    private KafkaContainer kafkaContainer;
 
     @Autowired
     private JsonMapper jsonMapper;
@@ -80,15 +85,18 @@ class EmailDeliveryIntegrationTest {
     }
 
     @Test
-    void skipsMalformedMessageAndKeepsConsuming() throws Exception {
+    void deadLettersMalformedMessageAndKeepsConsuming() throws Exception {
         String userId = uniqueUserId();
         String subject = "After poison " + UUID.randomUUID();
         UUID id = insertNotification(userId, subject, "QUEUED");
+        String poison = "{this is not json " + UUID.randomUUID();
 
-        publish(userId, "{this is not json");
+        publish(userId, poison);
         publish(userId, message(id, userId, subject));
 
         await().atMost(TIMEOUT).until(() -> "SENT".equals(statusOf(id)));
+        TopicReader.awaitRecord(kafkaContainer.getBootstrapServers(), EMAIL_TOPIC + "-dlt",
+                r -> poison.equals(r.value()));
     }
 
     @Test
@@ -101,7 +109,6 @@ class EmailDeliveryIntegrationTest {
         publish(userId, "null");
         publish(userId, message(id, userId, subject));
 
-        // Well under the error handler's five-minute retry window.
         await().atMost(TIMEOUT).until(() -> "SENT".equals(statusOf(id)));
     }
 

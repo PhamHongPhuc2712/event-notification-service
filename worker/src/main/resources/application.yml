@@ -14,8 +14,19 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        # How long a dead worker keeps its partitions before Kafka hands them to another.
+        session.timeout.ms: ${KAFKA_SESSION_TIMEOUT_MS:45000}
+    # Used to publish to retry and dead-letter topics, and by the replay tool.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
     listener:
-      # Offsets are committed only after the listener returns for the whole poll batch.
+      # Offsets are committed only after the listener returns for the whole poll batch. A
+      # failed record is committed only once it has been published to a retry topic.
       ack-mode: batch
   mail:
     host: ${MAIL_HOST:localhost}
@@ -32,14 +43,30 @@ server:
 notifications:
   topics:
     email: notifications.email
+    sms: notifications.sms
+    # Retry topics get the same partition count, so a retried record keeps its partition.
+    partitions: 6
   consumer:
     email-group: email-worker
+    sms-group: sms-worker
     concurrency: 3
   mail:
     from: no-reply@event-notification.local
+  sms:
+    base-url: ${MOCK_SMS_URL:http://localhost:8082}
+    connect-timeout: 2s
+    read-timeout: 5s
   delivery:
-    # Shorter than the error handler's five-minute retry window, so a retry outlives a dead worker's claim.
-    claim-lease: 60s
+    # Longer than any one send (SMTP worst case 25s, SMS 7s), and shorter than the total
+    # retry schedule, so a later retry can take over a dead worker's claim.
+    claim-lease: ${CLAIM_LEASE:60s}
+  retry:
+    # 1 attempt + 5 retries waiting about 2s, 6s, 18s, 54s and 60s: 140s in total.
+    attempts: 6
+    initial-delay: 2s
+    multiplier: 3
+    max-delay: 60s
+    jitter: 1s
 
 management:
   endpoints:

@@ -5,3 +5,15 @@ spring:
   # The api module owns the schema. Apply its migrations so tests run against the real tables.
   flyway:
     locations: filesystem:../api/src/main/resources/db/migration
+
+# Short delays so retry and dead-letter tests finish in seconds.
+notifications:
+  sms:
+    connect-timeout: 1s
+    read-timeout: 1s
+  retry:
+    attempts: 4
+    initial-delay: 200ms
+    multiplier: 2
+    max-delay: 1s
+    jitter: 50ms

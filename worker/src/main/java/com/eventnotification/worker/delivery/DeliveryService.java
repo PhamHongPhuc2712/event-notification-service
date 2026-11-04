@@ -1,12 +1,8 @@
 package com.eventnotification.worker.delivery;
 
 import com.eventnotification.worker.config.WorkerProperties;
-import jakarta.mail.SendFailedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.mail.MailException;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -15,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Delivers one email notification.
+ * Delivers one notification through a channel's sender, at most once per notification.
  *
  * <p>Before sending, the worker claims the notification in {@code delivery_claims}. The claim
  * is atomic, so two workers that receive the same message (after a rebalance, say) cannot both
@@ -23,38 +19,31 @@ import java.util.UUID;
  * the notification SENT; see docs/DESIGN.md.
  */
 @Service
-public class EmailDeliveryService {
+public class DeliveryService {
 
-    /** Public failure code. Raw SMTP errors stay in the logs, because they reveal internal hosts. */
-    static final String RECIPIENT_REJECTED = "RECIPIENT_REJECTED";
+    private static final Logger log = LoggerFactory.getLogger(DeliveryService.class);
 
-    private static final Logger log = LoggerFactory.getLogger(EmailDeliveryService.class);
-
-    private final JavaMailSender mailSender;
     private final NotificationStatusRepository statuses;
     private final DeliveryClaimRepository claims;
-    private final String from;
     private final Duration claimLease;
     private final Clock clock;
     private final String workerId = UUID.randomUUID().toString();
 
-    public EmailDeliveryService(JavaMailSender mailSender, NotificationStatusRepository statuses,
-                                DeliveryClaimRepository claims, WorkerProperties properties, Clock clock) {
-        this.mailSender = mailSender;
+    public DeliveryService(NotificationStatusRepository statuses, DeliveryClaimRepository claims,
+                           WorkerProperties properties, Clock clock) {
         this.statuses = statuses;
         this.claims = claims;
-        this.from = properties.mail().from();
         this.claimLease = properties.delivery().claimLease();
         this.clock = clock;
     }
 
     /**
-     * Sends the email, or skips it if it was already handled.
+     * Sends the notification, or skips it if it was already handled.
      *
-     * @throws TransientDeliveryException if the mail server could not be reached, or another
+     * @throws TransientDeliveryException if sending failed in a way a retry may fix, or another
      *                                    worker holds a live claim; the caller retries
      */
-    public DeliveryOutcome deliver(NotificationMessage message) {
+    public DeliveryOutcome deliver(NotificationMessage message, ChannelSender sender) {
         UUID id = message.notificationId();
         // Cheap check first, so redelivered messages for finished notifications skip the claim.
         Optional<DeliveryOutcome> skip = skipReason(id);
@@ -74,20 +63,28 @@ public class EmailDeliveryService {
         }
 
         try {
-            mailSender.send(toMail(message));
-        } catch (MailException e) {
-            if (!isPermanent(e)) {
-                claims.release(id, workerId);
-                throw new TransientDeliveryException("Mail server unavailable for notification " + id, e);
-            }
-            log.warn("Email for notification {} rejected permanently: {}", message.notificationId(), e.getMessage());
-            statuses.markFailed(message.notificationId(), RECIPIENT_REJECTED, clock.instant());
+            sender.send(message);
+        } catch (PermanentDeliveryException e) {
+            log.warn("Notification {} failed permanently ({}): {}", id, e.failureCode(), e.getMessage());
+            statuses.markFailed(id, e.failureCode(), clock.instant());
             return DeliveryOutcome.FAILED;
+        } catch (RuntimeException e) {
+            release(id);
+            throw e;
         }
 
-        statuses.markSent(message.notificationId(), clock.instant());
-        log.info("Sent notification {} to user {}", message.notificationId(), message.userId());
+        statuses.markSent(id, clock.instant());
+        log.info("Sent {} notification {} to user {}", message.channel(), id, message.userId());
         return DeliveryOutcome.SENT;
+    }
+
+    /** Lets the retry claim straight away instead of waiting for the lease to expire. */
+    private void release(UUID id) {
+        try {
+            claims.release(id, workerId);
+        } catch (RuntimeException e) {
+            log.warn("Could not release claim on notification {}; it expires after {}", id, claimLease, e);
+        }
     }
 
     private Optional<DeliveryOutcome> skipReason(UUID id) {
@@ -101,27 +98,5 @@ public class EmailDeliveryService {
             return Optional.of(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
         }
         return Optional.empty();
-    }
-
-    /**
-     * The server accepted the connection but refused the message or its recipients, so
-     * retrying cannot help. Connection, timeout and authentication errors are transient.
-     */
-    private static boolean isPermanent(MailException e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof SendFailedException) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private SimpleMailMessage toMail(NotificationMessage message) {
-        SimpleMailMessage mail = new SimpleMailMessage();
-        mail.setFrom(from);
-        mail.setTo(message.recipient());
-        mail.setSubject(message.subject());
-        mail.setText(message.body());
-        return mail;
     }
 }

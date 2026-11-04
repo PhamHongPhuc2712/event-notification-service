@@ -8,7 +8,12 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** Real Postgres, Kafka and Mailpit for tests, using the same image versions as infra/docker-compose.yml. */
+import java.io.IOException;
+
+/**
+ * Real Postgres, Kafka and Mailpit for tests, using the same image versions as
+ * infra/docker-compose.yml, plus a scriptable fake SMS provider.
+ */
 @TestConfiguration(proxyBeanMethods = false)
 public class TestcontainersConfiguration {
 
@@ -33,11 +38,17 @@ public class TestcontainersConfiguration {
                 .withExposedPorts(MAILPIT_SMTP_PORT, MAILPIT_HTTP_PORT);
     }
 
+    @Bean(destroyMethod = "close")
+    FakeSmsProvider fakeSmsProvider() throws IOException {
+        return new FakeSmsProvider();
+    }
+
     @Bean
-    DynamicPropertyRegistrar mailProperties(GenericContainer<?> mailpit) {
+    DynamicPropertyRegistrar providerProperties(GenericContainer<?> mailpit, FakeSmsProvider sms) {
         return registry -> {
             registry.add("spring.mail.host", mailpit::getHost);
             registry.add("spring.mail.port", () -> mailpit.getMappedPort(MAILPIT_SMTP_PORT));
+            registry.add("notifications.sms.base-url", () -> sms.baseUrl().toString());
         };
     }
 }

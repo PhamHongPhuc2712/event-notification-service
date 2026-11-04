@@ -1,0 +1,7 @@
+# One-off replay of a dead-letter topic; see ReplayCommand. No consumers, no web server.
+spring:
+  main:
+    web-application-type: none
+  kafka:
+    listener:
+      auto-startup: false
