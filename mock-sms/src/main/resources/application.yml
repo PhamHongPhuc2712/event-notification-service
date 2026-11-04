@@ -1,9 +1,26 @@
 spring:
   application:
     name: mock-sms
+  # Injected delays sleep the request thread; virtual threads make that cheap.
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
 
 server:
   port: ${SERVER_PORT:8082}
+
+# Fault rates are probabilities per request and can be changed at runtime with PUT /admin/faults.
+mock-sms:
+  faults:
+    failure-rate: ${MOCK_SMS_FAILURE_RATE:0.1}
+    timeout-rate: ${MOCK_SMS_TIMEOUT_RATE:0.05}
+    slow-rate: ${MOCK_SMS_SLOW_RATE:0.1}
+    # Longer than the worker's read timeout, so the worker gives up although the SMS was accepted.
+    timeout-delay: ${MOCK_SMS_TIMEOUT_DELAY:10s}
+    slow-delay: ${MOCK_SMS_SLOW_DELAY:1500ms}
 
 management:
   endpoints:
