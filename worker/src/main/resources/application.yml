@@ -20,6 +20,11 @@ spring:
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
+    # Bounds how long one send can take; must stay well under notifications.delivery.claim-lease.
+    properties:
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 10000
+      mail.smtp.writetimeout: 10000
 
 server:
   port: ${SERVER_PORT:8081}
@@ -32,6 +37,9 @@ notifications:
     concurrency: 3
   mail:
     from: no-reply@event-notification.local
+  delivery:
+    # Shorter than the error handler's five-minute retry window, so a retry outlives a dead worker's claim.
+    claim-lease: 60s
 
 management:
   endpoints:

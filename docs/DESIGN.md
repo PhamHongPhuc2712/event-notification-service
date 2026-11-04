@@ -74,9 +74,20 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **Offsets commit per poll batch.** The worker uses Spring Kafka's batch ack mode: offsets are
   committed after the listener has processed every record from a poll. A crash mid-batch
   redelivers the processed records too, which is safe only because delivery is idempotent.
-- **The Week 1–2 duplicate check is not race-proof.** The worker reads the status and only sends
-  when it is QUEUED, which stops ordinary redeliveries. Two consumers could still both read
-  QUEUED during a rebalance. Weeks 3–4 replace this with an atomic claim.
+- **Workers claim a notification before sending it.** A status check alone is not race-proof:
+  during a rebalance two consumers can both read QUEUED. So the worker first inserts a row into
+  `delivery_claims`, keyed by notification ID, with `INSERT ... ON CONFLICT DO UPDATE ... WHERE`
+  the existing claim is older than a 60-second lease. Postgres serializes the inserts on the
+  primary key, so exactly one worker wins; a test races 16 threads to check this. The lease uses
+  the database clock, so clock skew between workers does not matter.
+- **A held claim is retried, never skipped.** If another worker holds a live claim, the worker
+  throws a retryable error instead of acknowledging the message. Otherwise a worker that crashed
+  after claiming would lose the notification: the message would be acknowledged by the new
+  owner and never seen again. The lease (60s) is shorter than the retry window (5 min), so the
+  retry takes over a dead worker's claim. SMTP timeouts (25s worst case) stay under the lease so
+  a slow send is not claimed twice. After winning the claim the worker checks the status again,
+  in case the previous owner finished just before its lease expired. A transient send failure
+  releases the claim so the retry need not wait for the lease.
 - **Transient errors retry in place.** The worker retries a failing record with exponential
   backoff for about five minutes, which keeps per-user order but blocks that partition. Weeks 3–4
   move retries to separate retry topics so one bad record cannot stall a partition.
@@ -86,8 +97,10 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **Public failure reasons are codes.** The API returns `RECIPIENT_REJECTED`, never the raw SMTP
   error, which can reveal internal hostnames and ports. The full error goes to the logs.
 - **Crash between sending and recording.** If the database write fails after the email was sent,
-  the retry sends the email again, and a record skipped after five minutes stays QUEUED forever.
-  Planned: the Weeks 3–4 claim table, plus a reconciler for notifications stuck in QUEUED.
+  the retry sends the email again once the claim's lease expires, and a record skipped after five
+  minutes stays QUEUED forever. The claim cannot close this window, because SMTP has no
+  idempotency key: the worker cannot ask the server whether a message already went out. Planned:
+  a reconciler for notifications stuck in QUEUED.
 - **The outbox grows forever.** Published rows are never deleted. The partial index keeps polling
   fast, but a retention job should delete rows published more than a few days ago.
 

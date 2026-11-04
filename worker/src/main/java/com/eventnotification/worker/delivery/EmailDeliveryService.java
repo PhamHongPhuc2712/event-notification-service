@@ -10,14 +10,17 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Delivers one email notification.
  *
- * <p>The status check below stops redelivered messages from being sent again in the common
- * case. It is not race-proof: two workers can both see QUEUED. Weeks 3-4 replace it with an
- * atomic claim backed by a unique constraint.
+ * <p>Before sending, the worker claims the notification in {@code delivery_claims}. The claim
+ * is atomic, so two workers that receive the same message (after a rebalance, say) cannot both
+ * send it. A duplicate is still possible if a worker crashes after sending but before marking
+ * the notification SENT; see docs/DESIGN.md.
  */
 @Service
 public class EmailDeliveryService {
@@ -29,39 +32,53 @@ public class EmailDeliveryService {
 
     private final JavaMailSender mailSender;
     private final NotificationStatusRepository statuses;
+    private final DeliveryClaimRepository claims;
     private final String from;
+    private final Duration claimLease;
     private final Clock clock;
+    private final String workerId = UUID.randomUUID().toString();
 
     public EmailDeliveryService(JavaMailSender mailSender, NotificationStatusRepository statuses,
-                                WorkerProperties properties, Clock clock) {
+                                DeliveryClaimRepository claims, WorkerProperties properties, Clock clock) {
         this.mailSender = mailSender;
         this.statuses = statuses;
+        this.claims = claims;
         this.from = properties.mail().from();
+        this.claimLease = properties.delivery().claimLease();
         this.clock = clock;
     }
 
     /**
      * Sends the email, or skips it if it was already handled.
      *
-     * @throws TransientDeliveryException if the mail server could not be reached; the caller retries
+     * @throws TransientDeliveryException if the mail server could not be reached, or another
+     *                                    worker holds a live claim; the caller retries
      */
     public DeliveryOutcome deliver(NotificationMessage message) {
-        Optional<String> status = statuses.findStatus(message.notificationId());
-        if (status.isEmpty()) {
-            log.warn("Skipping unknown notification {}", message.notificationId());
-            return DeliveryOutcome.SKIPPED_UNKNOWN;
+        UUID id = message.notificationId();
+        // Cheap check first, so redelivered messages for finished notifications skip the claim.
+        Optional<DeliveryOutcome> skip = skipReason(id);
+        if (skip.isPresent()) {
+            return skip.get();
         }
-        if (!"QUEUED".equals(status.get())) {
-            log.info("Skipping notification {} already in status {}", message.notificationId(), status.get());
-            return DeliveryOutcome.SKIPPED_ALREADY_PROCESSED;
+
+        if (!claims.tryClaim(id, workerId, claimLease)) {
+            // Never acknowledge a message we did not settle: if the claimant has crashed, a
+            // retry after its lease expires takes the notification over.
+            throw new TransientDeliveryException("Notification " + id + " is claimed by another worker", null);
+        }
+        // Check again: the previous claimant may have finished just before its lease expired.
+        skip = skipReason(id);
+        if (skip.isPresent()) {
+            return skip.get();
         }
 
         try {
             mailSender.send(toMail(message));
         } catch (MailException e) {
             if (!isPermanent(e)) {
-                throw new TransientDeliveryException("Mail server unavailable for notification "
-                        + message.notificationId(), e);
+                claims.release(id, workerId);
+                throw new TransientDeliveryException("Mail server unavailable for notification " + id, e);
             }
             log.warn("Email for notification {} rejected permanently: {}", message.notificationId(), e.getMessage());
             statuses.markFailed(message.notificationId(), RECIPIENT_REJECTED, clock.instant());
@@ -71,6 +88,19 @@ public class EmailDeliveryService {
         statuses.markSent(message.notificationId(), clock.instant());
         log.info("Sent notification {} to user {}", message.notificationId(), message.userId());
         return DeliveryOutcome.SENT;
+    }
+
+    private Optional<DeliveryOutcome> skipReason(UUID id) {
+        Optional<String> status = statuses.findStatus(id);
+        if (status.isEmpty()) {
+            log.warn("Skipping unknown notification {}", id);
+            return Optional.of(DeliveryOutcome.SKIPPED_UNKNOWN);
+        }
+        if (!"QUEUED".equals(status.get())) {
+            log.info("Skipping notification {} already in status {}", id, status.get());
+            return Optional.of(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
+        }
+        return Optional.empty();
     }
 
     /**

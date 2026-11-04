@@ -8,10 +8,12 @@ import jakarta.validation.constraints.NotNull;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.Duration;
+
 @Validated
 @ConfigurationProperties("notifications")
 public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Consumer consumer,
-                               @Valid @NotNull Mail mail) {
+                               @Valid @NotNull Mail mail, @Valid @NotNull Delivery delivery) {
 
     public record Topics(@NotBlank String email) {
     }
@@ -20,5 +22,12 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
     }
 
     public record Mail(@NotBlank @Email String from) {
+    }
+
+    /**
+     * @param claimLease how long a worker's claim on a notification lasts. Must be longer than
+     *                   the SMTP timeouts, or a slow send can be claimed and sent again.
+     */
+    public record Delivery(@NotNull Duration claimLease) {
     }
 }
