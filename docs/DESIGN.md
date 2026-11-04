@@ -25,14 +25,19 @@ in order, without being spammed, even when parts of the system fail.
 ## Delivery guarantee
 
 Kafka gives **at-least-once** delivery: a message can be redelivered after a crash.
-Workers are **idempotent**: before sending, a worker records the message ID in a table
-with a unique constraint, and skips any ID it has already handled.
+Workers are **idempotent**: before sending, a worker claims the notification in a table
+keyed by its ID, and skips any notification that is no longer QUEUED.
 At-least-once plus idempotent processing gives **effectively-once** delivery to the user.
 
 True exactly-once delivery to an external provider is impossible. If a worker crashes
 after the provider accepts the message but before the worker records success, the system
-cannot know whether the send happened. Open question to resolve in Weeks 3–4: which side
-of that gap to choose, and how provider-side idempotency keys narrow it.
+cannot know whether the send happened. The system chooses the **resend** side of that gap:
+losing a password-reset code is worse than sending it twice. Where the provider supports an
+idempotency key, as the SMS provider does, the resend is harmless: the worker sends the
+notification ID as the key, and the provider accepts each key once. Email over SMTP has no
+such key, so an email can still, rarely, arrive twice.
+
+The chaos test checks all of this end to end; see [Chaos test](#chaos-test).
 
 ## Architecture
 
@@ -42,9 +47,13 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
                                                               ▼
                                                Kafka, partitioned by user ID
                                                               ▼
-                                   Worker: dedupe ─► rate limit ─► send ─► record status
-                                                              ▼
-                                          Mailpit │ signed webhook │ mock SMS
+                                   Worker: claim ─► send ─► record status
+                                       │ transient failure             ▼
+                                       ▼                     Mailpit │ mock SMS
+                         <topic>-retry-0 … -retry-N (jittered delays)
+                                       │ out of retries
+                                       ▼
+                         <topic>-dlt ─► marked FAILED ─► replay tool ─► <topic>
 ```
 
 ## Key decisions
@@ -55,6 +64,8 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Publishing | Transactional outbox | Avoids the dual-write problem between Postgres and Kafka | Publish directly after commit |
 | Dedupe store | Postgres unique constraint | Durable and transactional with the status update | Redis with TTL |
 | Rate limiting | Redis token bucket in Lua | Atomic across many workers | In-memory per worker |
+| Retries | Retry topics with per-record jitter, then a dead-letter topic | A failing record does not stall its partition | Blocking retries in place |
+| SMS duplicates | Provider idempotency key = notification ID | A timed-out send can be retried safely | Never retry a timeout (loses messages) |
 
 ## Tradeoffs and open questions
 
@@ -71,9 +82,12 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **The outbox publishes at least once.** Rows are marked published only after Kafka acknowledges
   the whole batch. A crash between the ack and the commit republishes the batch, so consumers
   must be idempotent.
-- **Offsets commit per poll batch.** The worker uses Spring Kafka's batch ack mode: offsets are
-  committed after the listener has processed every record from a poll. A crash mid-batch
-  redelivers the processed records too, which is safe only because delivery is idempotent.
+- **Offsets commit only after a record is settled.** The worker uses Spring Kafka's batch ack
+  mode: offsets are committed after the listener has handled every record from a poll. A record
+  counts as handled once it is sent, failed permanently, or published to a retry topic, so a
+  crash never skips an unsettled record. A crash mid-batch redelivers the handled records too,
+  which is safe only because delivery is idempotent. The chaos test kills workers with the
+  equivalent of `kill -9`, which commits nothing, and still loses no notification.
 - **Idempotency keys are stored with the notification, in the same transaction.** The API
   inserts `(user_id, key)` into `idempotency_keys` before inserting the notification. A
   concurrent request with the same key blocks on the primary key until the first commits, then
@@ -93,26 +107,77 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **A held claim is retried, never skipped.** If another worker holds a live claim, the worker
   throws a retryable error instead of acknowledging the message. Otherwise a worker that crashed
   after claiming would lose the notification: the message would be acknowledged by the new
-  owner and never seen again. The lease (60s) is shorter than the retry window (5 min), so the
-  retry takes over a dead worker's claim. SMTP timeouts (25s worst case) stay under the lease so
-  a slow send is not claimed twice. After winning the claim the worker checks the status again,
+  owner and never seen again. The lease (60s) is shorter than the retry schedule (about 140s),
+  so a later retry takes over a dead worker's claim. Send timeouts (SMTP 25s worst case, SMS 7s)
+  stay under the lease so a slow send is not claimed twice. After winning the claim the worker checks the status again,
   in case the previous owner finished just before its lease expired. A transient send failure
   releases the claim so the retry need not wait for the lease.
-- **Transient errors retry in place.** The worker retries a failing record with exponential
-  backoff for about five minutes, which keeps per-user order but blocks that partition. Weeks 3–4
-  move retries to separate retry topics so one bad record cannot stall a partition.
+- **Retries go to retry topics, not back to the front of the partition.** A transient failure
+  publishes the record to `<topic>-retry-0`, then `-retry-1` and so on, five retries in all, and
+  finally to `<topic>-dlt`. Retrying in place would keep per-user order, but one slow record would
+  stall its whole partition: during an SMS provider outage, every user on that partition would
+  wait. The cost is order: a retried notification can arrive after a newer one for the same
+  user. That is fine for independent notifications, but not for, say, "order shipped"
+  overtaking "order confirmed". Those would need a per-user sequence number the worker
+  enforces. Malformed records skip the retries and go straight to the dead-letter topic.
+- **Each record gets its own jittered delay.** Retry `i` waits `min(2s * 3^i, 60s)` plus or minus
+  1s. Spring Kafka can add jitter, but it draws it once per topic at startup, so every record in
+  a retry topic would still wait the same delay: when an outage fails a thousand records in the
+  same second, they would all retry in the same second and could knock the provider over again.
+  `RetryJitter` replaces the due-time header Spring writes with one drawn per record, and a test
+  checks that twenty records failing together get spread-out delays.
+- **Dead letters are marked FAILED, then can be replayed.** When the last retry fails, the
+  dead-letter handler marks the notification FAILED with `RETRIES_EXHAUSTED`, so clients see a
+  final status instead of QUEUED forever. Once the cause is fixed, the replay tool
+  (`--spring.profiles.active=replay --topic=<topic>-dlt`) requeues each notification and
+  publishes it to the main topic again. It commits each record's offset after publishing it, so
+  a crash mid-replay at worst replays a record twice, which the claim absorbs. Only
+  `RETRIES_EXHAUSTED` notifications are requeued; a rejected recipient stays FAILED.
+- **SMS timeouts are not failures.** A timeout means the worker does not know whether the
+  provider accepted the SMS. The worker retries with the same `Idempotency-Key` (the
+  notification ID), and the provider accepts each key once. The mock provider has a fault for
+  exactly this: it accepts the SMS, then answers after the worker has given up. In the chaos
+  run, the key absorbed 53 repeat requests that would otherwise have texted users twice.
 - **Temporary versus permanent email failures.** Only a refusal from the mail server, such as
   an unknown mailbox, marks a notification FAILED. Connection errors and timeouts are retried,
   because marking them FAILED would make the status final and block any later retry.
-- **Public failure reasons are codes.** The API returns `RECIPIENT_REJECTED`, never the raw SMTP
-  error, which can reveal internal hostnames and ports. The full error goes to the logs.
-- **Crash between sending and recording.** If the database write fails after the email was sent,
-  the retry sends the email again once the claim's lease expires, and a record skipped after five
-  minutes stays QUEUED forever. The claim cannot close this window, because SMTP has no
-  idempotency key: the worker cannot ask the server whether a message already went out. Planned:
-  a reconciler for notifications stuck in QUEUED.
+- **Public failure reasons are codes.** The API returns `RECIPIENT_REJECTED`,
+  `REJECTED_BY_PROVIDER` or `RETRIES_EXHAUSTED`, never the raw provider error, which can reveal
+  internal hostnames and ports. The full error goes to the logs. For SMS, a `400` is a rejected
+  recipient, `408`, `429` and `5xx` are retried, and other `4xx` are rejected by the provider.
+- **Crash between sending and recording.** If the worker dies after the email was sent but
+  before marking it SENT, the retry sends the email again once the claim's lease expires. The
+  claim cannot close this window, because SMTP has no idempotency key: the worker cannot ask the
+  server whether a message already went out. For SMS the provider's key closes it.
+- **When Postgres is down, records drain to the dead-letter topic.** Retry topics cannot tell a
+  database outage from a provider outage, so after about 140s every record lands in the
+  dead-letter topic, where marking it FAILED fails too, so the dead-letter handler keeps
+  retrying. Replay recovers them afterwards. A blocking retry for database errors in front of the
+  retry topics would avoid this; it is not built yet.
 - **The outbox grows forever.** Published rows are never deleted. The partial index keeps polling
   fast, but a retention job should delete rows published more than a few days ago.
+
+## Chaos test
+
+`./mvnw -Pchaos verify` (also a CI job) starts the real jars: mock-sms with 10% failures, 5%
+timeouts and 10% slow responses, the api, and three workers, against Postgres and Kafka in
+containers. Eight clients send 1,000 SMS notifications at about 20 a second, retrying with the
+same `Idempotency-Key` whenever the API is unreachable. Every 7 seconds one or two workers are
+killed with the equivalent of `kill -9` and replaced; once, the API is killed instead.
+
+The test then checks that the API created exactly 1,000 notifications, that all 1,000 are SENT,
+and that the provider accepted exactly one SMS for each of them. First run on a laptop:
+
+| Measure | Value |
+|---|---|
+| Processes killed | 11 workers and the API |
+| Faults injected by the provider | 121 failures, 48 timeouts, 128 slow responses |
+| Notifications created / SENT / accepted by the provider | 1,000 / 1,000 / 1,000 |
+| Repeat requests absorbed by the provider's idempotency key | 53 |
+| Client retries while the API was down | 446 |
+
+The 53 absorbed requests are the honest number: the system *did* send those SMS twice, and only
+the provider-side key kept users from receiving them twice.
 
 ## Hardest bug
 
