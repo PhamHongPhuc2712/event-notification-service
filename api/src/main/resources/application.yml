@@ -28,6 +28,7 @@ server:
 notifications:
   topics:
     email: notifications.email
+    sms: notifications.sms
     partitions: 6
   outbox:
     poll-interval: 200ms

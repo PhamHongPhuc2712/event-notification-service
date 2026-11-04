@@ -93,6 +93,7 @@ public class NotificationService {
     private String topicFor(Channel channel) {
         return switch (channel) {
             case EMAIL -> properties.topics().email();
+            case SMS -> properties.topics().sms();
         };
     }
 }

@@ -18,7 +18,16 @@ class AppConfig {
     /** Created on startup if missing. Partitioned by user ID so each user's notifications stay in order. */
     @Bean
     NewTopic emailTopic(NotificationProperties properties) {
-        return TopicBuilder.name(properties.topics().email())
+        return topic(properties.topics().email(), properties);
+    }
+
+    @Bean
+    NewTopic smsTopic(NotificationProperties properties) {
+        return topic(properties.topics().sms(), properties);
+    }
+
+    private static NewTopic topic(String name, NotificationProperties properties) {
+        return TopicBuilder.name(name)
                 .partitions(properties.topics().partitions())
                 .replicas(1)
                 .build();

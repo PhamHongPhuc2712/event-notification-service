@@ -52,6 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class NotificationApiIntegrationTest {
 
     private static final String EMAIL_TOPIC = "notifications.email";
+    private static final String SMS_TOPIC = "notifications.sms";
 
     @Autowired
     private MockMvc mockMvc;
@@ -132,6 +133,15 @@ class NotificationApiIntegrationTest {
             // null character in body
             """
             {"userId":"u1","channel":"EMAIL","recipient":"a@example.com","subject":"s","body":"a\\u0000b"}""",
+            // SMS to an email address
+            """
+            {"userId":"u1","channel":"SMS","recipient":"a@example.com","body":"b"}""",
+            // SMS number without the + and country code
+            """
+            {"userId":"u1","channel":"SMS","recipient":"91234567","body":"b"}""",
+            // email to a phone number
+            """
+            {"userId":"u1","channel":"EMAIL","recipient":"+6591234567","subject":"s","body":"b"}""",
             // unknown channel
             """
             {"userId":"u1","channel":"PIGEON","recipient":"a@example.com","subject":"s","body":"b"}""",
@@ -149,6 +159,33 @@ class NotificationApiIntegrationTest {
         mockMvc.perform(post("/notifications").contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"userId":"u1","channel":"EMAIL","recipient":"not-an-email","subject":"s"}"""))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[?(@.field == 'recipient')]").exists())
+                .andExpect(jsonPath("$.errors[?(@.field == 'body')]").exists());
+    }
+
+    @Test
+    void smsIsAcceptedWithoutSubjectAndPublishedToTheSmsTopic() throws Exception {
+        String userId = uniqueUserId();
+        MvcResult result = mockMvc.perform(post("/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(smsRequest(userId, "Your code is 123456")))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.channel").value("SMS"))
+                .andExpect(jsonPath("$.recipient").value("+6591234567"))
+                .andReturn();
+
+        ConsumerRecord<String, String> record = awaitRecordFor(idOf(result), SMS_TOPIC);
+
+        assertThat(record.key()).isEqualTo(userId);
+        assertThat(jsonMapper.readTree(record.value()).get("channel").asString()).isEqualTo("SMS");
+    }
+
+    @Test
+    void channelSpecificErrorsAreReportedOnTheirFields() throws Exception {
+        mockMvc.perform(post("/notifications").contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonMapper.writeValueAsString(Map.of(
+                                "userId", "u1", "channel", "SMS", "recipient", "12345", "body", "x".repeat(1_601)))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[?(@.field == 'recipient')]").exists())
                 .andExpect(jsonPath("$.errors[?(@.field == 'body')]").exists());
@@ -294,7 +331,19 @@ class NotificationApiIntegrationTest {
                 "body", "Hello from the test"));
     }
 
+    private String smsRequest(String userId, String body) {
+        return jsonMapper.writeValueAsString(Map.of(
+                "userId", userId,
+                "channel", "SMS",
+                "recipient", "+6591234567",
+                "body", body));
+    }
+
     private ConsumerRecord<String, String> awaitRecordFor(UUID notificationId) {
+        return awaitRecordFor(notificationId, EMAIL_TOPIC);
+    }
+
+    private ConsumerRecord<String, String> awaitRecordFor(UUID notificationId, String topic) {
         Map<String, Object> config = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
                 ConsumerConfig.GROUP_ID_CONFIG, "test-" + UUID.randomUUID(),
@@ -303,7 +352,7 @@ class NotificationApiIntegrationTest {
                 ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         AtomicReference<ConsumerRecord<String, String>> found = new AtomicReference<>();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
-            consumer.subscribe(List.of(EMAIL_TOPIC));
+            consumer.subscribe(List.of(topic));
             await().atMost(Duration.ofSeconds(30)).until(() -> {
                 for (ConsumerRecord<String, String> r : consumer.poll(Duration.ofMillis(250))) {
                     if (r.value().contains(notificationId.toString())) {

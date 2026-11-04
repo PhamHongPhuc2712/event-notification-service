@@ -13,7 +13,7 @@ import java.time.Duration;
 @ConfigurationProperties("notifications")
 public record NotificationProperties(@Valid @NotNull Topics topics, @Valid @NotNull Outbox outbox) {
 
-    public record Topics(@NotBlank String email, @Min(1) int partitions) {
+    public record Topics(@NotBlank String email, @NotBlank String sms, @Min(1) int partitions) {
     }
 
     public record Outbox(@NotNull Duration pollInterval, @Min(1) int batchSize, @NotNull Duration sendTimeout) {
