@@ -27,6 +27,19 @@
         <java.version>21</java.version>
     </properties>
 
+    <!--
+        The chaos test starts the packaged jars of the other modules as processes, so it runs
+        last and only on request: ./mvnw -Pchaos verify
+    -->
+    <profiles>
+        <profile>
+            <id>chaos</id>
+            <modules>
+                <module>chaos-test</module>
+            </modules>
+        </profile>
+    </profiles>
+
     <!-- Dependencies every service shares: health checks and Prometheus metrics. -->
     <dependencies>
         <dependency>
