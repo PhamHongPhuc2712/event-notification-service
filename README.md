@@ -4,10 +4,9 @@ A multi-channel notification service. Other applications ask it to notify a user
 the channel, respects user preferences and rate limits, and delivers every notification
 exactly once from the user's point of view, even when workers, the broker, or providers fail.
 
-> **Status:** Weeks 1–4 done — email and SMS flow end to end through the outbox, Kafka and the workers,
-> with idempotency keys, retry topics, a dead-letter topic with replay, and a chaos test that kills
-> workers mid-run and loses or duplicates nothing. See [docs/PLAN.md](docs/PLAN.md) for the roadmap
-> and [docs/DESIGN.md](docs/DESIGN.md) for the design.
+> **Status:** email and SMS flow end to end through the outbox, Kafka and the workers, with
+> idempotency keys, retry topics, a dead-letter topic with replay, and a chaos test that kills
+> workers mid-run and loses or duplicates nothing. See [docs/DESIGN.md](docs/DESIGN.md) for the design.
 
 ## Stack
 
@@ -51,7 +50,7 @@ On Windows PowerShell, use `.\mvnw.cmd` instead of `./mvnw`.
 
 ## Python helper scripts
 
-Python is only used for helper scripts such as the Week 7 load-test verifier.
+Python is only used for helper scripts such as the load-test verifier.
 
 ```bash
 python -m venv .venv                      # once

@@ -1,6 +1,6 @@
 package com.eventnotification.api.notification;
 
-/** Delivery channels. WEBHOOK is added in Week 5. */
+/** Delivery channels. */
 public enum Channel {
     EMAIL,
     SMS

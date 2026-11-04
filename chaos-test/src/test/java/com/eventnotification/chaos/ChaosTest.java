@@ -41,8 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The Weeks 3-4 "done when": kill workers mid-run and end with zero lost and zero duplicate
- * deliveries.
+ * Kills workers mid-run and checks the run ends with zero lost and zero duplicate deliveries.
  *
  * <p>Runs the real jars: mock-sms with fault injection, the api, and three workers, against
  * Postgres and Kafka in containers. Clients send SMS notifications at a steady rate, retrying

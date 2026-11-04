@@ -25,4 +25,10 @@ loadtest/results/
 
 # Python virtual environment
 .venv/
+
+# Personal planning notes and AI assistant files stay local
+docs/PLAN.md
+CLAUDE.md
+AGENTS.md
+.claude/
 __pycache__/

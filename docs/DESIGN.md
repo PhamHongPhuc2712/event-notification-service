@@ -1,7 +1,5 @@
 # Design
 
-> Week 0 draft. Expand the tradeoffs section as you build.
-
 ## Problem
 
 Other applications need to notify their users through email, SMS and webhooks.
@@ -181,4 +179,4 @@ the provider-side key kept users from receiving them twice.
 
 ## Hardest bug
 
-- _Fill in during Weeks 3–7._
+- _To be written._
