@@ -74,6 +74,16 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **Offsets commit per poll batch.** The worker uses Spring Kafka's batch ack mode: offsets are
   committed after the listener has processed every record from a poll. A crash mid-batch
   redelivers the processed records too, which is safe only because delivery is idempotent.
+- **Idempotency keys are stored with the notification, in the same transaction.** The API
+  inserts `(user_id, key)` into `idempotency_keys` before inserting the notification. A
+  concurrent request with the same key blocks on the primary key until the first commits, then
+  replays its notification; a test fires 10 at once and gets exactly one. Keys are scoped per
+  user so two clients cannot collide, which matters once there is authentication and the
+  scope becomes the caller's identity. The request body is hashed (SHA-256 of its fields in a
+  fixed order): the same key with a different body is a client bug, answered with `422`.
+  A replay returns the notification's current state rather than a stored copy of the first
+  response, so it may say SENT where the first said QUEUED. Keys are never deleted yet; a
+  24-hour expiry job belongs with the outbox cleanup.
 - **Workers claim a notification before sending it.** A status check alone is not race-proof:
   during a rebalance two consumers can both read QUEUED. So the worker first inserts a row into
   `delivery_claims`, keyed by notification ID, with `INSERT ... ON CONFLICT DO UPDATE ... WHERE`

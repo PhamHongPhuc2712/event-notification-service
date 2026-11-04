@@ -69,6 +69,14 @@ curl http://localhost:8080/notifications/{id}
 
 Invalid requests return `400` with an RFC 9457 problem body listing each invalid field.
 
+Retries are safe with an `Idempotency-Key` header (scoped per `userId`). Repeating the request
+returns the same notification with `Idempotent-Replayed: true`; reusing the key with a different
+body returns `422`.
+
+```bash
+curl -i -X POST http://localhost:8080/notifications -H "Content-Type: application/json"   -H "Idempotency-Key: order-42-shipped"   -d '{"userId":"user-42","channel":"EMAIL","recipient":"alice@example.com","subject":"Your order shipped","body":"It arrives Friday."}'
+```
+
 End-to-end smoke test, with infrastructure, `api` and `worker` running:
 
 ```bash

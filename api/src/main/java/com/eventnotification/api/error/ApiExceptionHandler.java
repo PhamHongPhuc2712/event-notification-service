@@ -1,5 +1,7 @@
 package com.eventnotification.api.error;
 
+import com.eventnotification.api.idempotency.IdempotencyKeyReusedException;
+import com.eventnotification.api.idempotency.InvalidIdempotencyKeyException;
 import com.eventnotification.api.notification.NotificationNotFoundException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -24,6 +26,17 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(NotificationNotFoundException.class)
     ProblemDetail handleNotFound(NotificationNotFoundException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    ProblemDetail handleInvalidIdempotencyKey(InvalidIdempotencyKeyException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+    }
+
+    /** 422, as in the IETF Idempotency-Key draft: the request is well formed but conflicts with the key. */
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    ProblemDetail handleIdempotencyKeyReused(IdempotencyKeyReusedException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, e.getMessage());
     }
 
     @Override

@@ -1,6 +1,7 @@
 package com.eventnotification.api.notification;
 
 import com.eventnotification.api.TestcontainersConfiguration;
+import com.eventnotification.api.idempotency.IdempotencyKey;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -17,16 +18,24 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
 import org.testcontainers.kafka.KafkaContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -55,6 +64,9 @@ class NotificationApiIntegrationTest {
 
     @Autowired
     private JsonMapper jsonMapper;
+
+    @Autowired
+    private NotificationService service;
 
     @Test
     void createReturnsAcceptedWithLocationAndQueuedStatus() throws Exception {
@@ -153,6 +165,115 @@ class NotificationApiIntegrationTest {
     void getWithMalformedIdReturnsBadRequest() throws Exception {
         mockMvc.perform(get("/notifications/not-a-uuid"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void repeatedIdempotencyKeyReturnsTheSameNotificationAndCreatesOnlyOne() throws Exception {
+        String userId = uniqueUserId();
+        String body = emailRequest(userId, "Receipt");
+
+        MvcResult first = postWithKey(body, "order-42-receipt")
+                .andExpect(status().isAccepted())
+                .andExpect(header().doesNotExist(NotificationController.REPLAYED_HEADER))
+                .andReturn();
+        MvcResult second = postWithKey(body, "order-42-receipt")
+                .andExpect(status().isAccepted())
+                .andExpect(header().string(NotificationController.REPLAYED_HEADER, "true"))
+                .andReturn();
+
+        assertThat(idOf(second)).isEqualTo(idOf(first));
+        assertThat(second.getResponse().getHeader("Location")).isEqualTo(first.getResponse().getHeader("Location"));
+        assertThat(countFor(userId, "notifications", "user_id")).isEqualTo(1);
+        assertThat(countFor(userId, "outbox", "message_key")).isEqualTo(1);
+    }
+
+    @Test
+    void reusingIdempotencyKeyWithDifferentBodyIsRejected() throws Exception {
+        String userId = uniqueUserId();
+        postWithKey(emailRequest(userId, "First"), "key-1").andExpect(status().isAccepted());
+
+        postWithKey(emailRequest(userId, "Second"), "key-1")
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(header().string("Content-Type", MediaType.APPLICATION_PROBLEM_JSON_VALUE));
+
+        assertThat(countFor(userId, "notifications", "user_id")).isEqualTo(1);
+    }
+
+    @Test
+    void idempotencyKeysAreScopedPerUser() throws Exception {
+        String alice = uniqueUserId();
+        String bob = uniqueUserId();
+
+        UUID aliceId = idOf(postWithKey(emailRequest(alice, "Hi"), "shared-key").andReturn());
+        UUID bobId = idOf(postWithKey(emailRequest(bob, "Hi"), "shared-key").andReturn());
+
+        assertThat(bobId).isNotEqualTo(aliceId);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "has space", "tab\tkey", "café"})
+    void invalidIdempotencyKeyIsRejected(String key) throws Exception {
+        String userId = uniqueUserId();
+        postWithKey(emailRequest(userId, "Hi"), key)
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Content-Type", MediaType.APPLICATION_PROBLEM_JSON_VALUE));
+
+        assertThat(countFor(userId, "notifications", "user_id")).isZero();
+    }
+
+    @Test
+    void idempotencyKeyLongerThan255CharactersIsRejected() throws Exception {
+        postWithKey(emailRequest(uniqueUserId(), "Hi"), "k".repeat(256)).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void concurrentRequestsWithTheSameKeyCreateExactlyOneNotification() throws Exception {
+        String userId = uniqueUserId();
+        CreateNotificationRequest request = new CreateNotificationRequest(userId, Channel.EMAIL,
+                "alice@example.com", "Concurrent", "Body");
+        IdempotencyKey key = new IdempotencyKey("concurrent-key");
+        int clients = 10;
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<CreateResult>> results = new ArrayList<>();
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(clients)) {
+            for (int i = 0; i < clients; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return service.create(request, key);
+                }));
+            }
+            start.countDown();
+
+            List<CreateResult> created = new ArrayList<>();
+            for (Future<CreateResult> result : results) {
+                created.add(result.get());
+            }
+            Set<UUID> ids = created.stream().map(r -> r.notification().id()).collect(Collectors.toSet());
+            assertThat(ids).hasSize(1);
+            assertThat(created).filteredOn(r -> !r.replayed()).hasSize(1);
+        }
+        assertThat(countFor(userId, "notifications", "user_id")).isEqualTo(1);
+    }
+
+    private ResultActions postWithKey(String body, String key)
+            throws Exception {
+        return mockMvc.perform(post("/notifications")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header(IdempotencyKey.HEADER, key)
+                .content(body));
+    }
+
+    private UUID idOf(MvcResult result) throws Exception {
+        return UUID.fromString(jsonMapper.readTree(result.getResponse().getContentAsString()).get("id").asString());
+    }
+
+    /** Table and column come from the test itself, never from input. */
+    private long countFor(String userId, String table, String column) {
+        return jdbc.sql("SELECT count(*) FROM " + table + " WHERE " + column + " = :userId")
+                .param("userId", userId)
+                .query(Long.class)
+                .single();
     }
 
     private UUID createEmail(String userId, String subject) throws Exception {
