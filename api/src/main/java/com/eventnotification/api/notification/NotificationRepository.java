@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,6 +45,36 @@ public class NotificationRepository {
                 .optional();
     }
 
+    /**
+     * Locks up to {@code limit} DEFERRED notifications whose quiet hours are over, oldest first.
+     * SKIP LOCKED lets several API instances release in parallel. Uses the database clock, so the
+     * API and the workers that set {@code deliver_after} agree on the time.
+     */
+    public List<Notification> lockDueDeferred(int limit) {
+        return jdbc.sql("""
+                        SELECT * FROM notifications
+                        WHERE status = 'DEFERRED' AND deliver_after <= now()
+                        ORDER BY deliver_after
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                        """)
+                .param("limit", limit)
+                .query(NotificationRepository::map)
+                .list();
+    }
+
+    /** Moves DEFERRED back to QUEUED. Returns false if the notification was not DEFERRED. */
+    public boolean requeueDeferred(UUID id, Instant now) {
+        return jdbc.sql("""
+                        UPDATE notifications
+                        SET status = 'QUEUED', deliver_after = NULL, updated_at = :now
+                        WHERE id = :id AND status = 'DEFERRED'
+                        """)
+                .param("id", id)
+                .param("now", Timestamp.from(now))
+                .update() == 1;
+    }
+
     private static Notification map(ResultSet rs, int rowNum) throws SQLException {
         return new Notification(
                 rs.getObject("id", UUID.class),
@@ -56,7 +87,8 @@ public class NotificationRepository {
                 rs.getString("failure_reason"),
                 toInstant(rs.getTimestamp("created_at")),
                 toInstant(rs.getTimestamp("updated_at")),
-                toInstant(rs.getTimestamp("sent_at")));
+                toInstant(rs.getTimestamp("sent_at")),
+                toInstant(rs.getTimestamp("deliver_after")));
     }
 
     private static Instant toInstant(Timestamp ts) {

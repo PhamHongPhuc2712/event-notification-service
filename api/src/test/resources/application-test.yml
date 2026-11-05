@@ -6,3 +6,5 @@ spring:
 notifications:
   outbox:
     poll-interval: 50ms
+  deferred:
+    poll-interval: 100ms

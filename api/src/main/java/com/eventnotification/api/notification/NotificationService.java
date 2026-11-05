@@ -59,14 +59,37 @@ public class NotificationService {
             }
         }
         notifications.insert(notification);
-        String payload = jsonMapper.writeValueAsString(NotificationMessage.from(notification));
-        outbox.insert(notification.id(), topicFor(notification.channel()), notification.userId(), payload,
-                notification.createdAt());
+        publish(notification);
         return new CreateResult(notification, false);
+    }
+
+    /**
+     * Puts DEFERRED notifications whose quiet hours have ended back on the queue: each is moved to
+     * QUEUED and gets a new outbox row, in one transaction.
+     *
+     * @return how many were released
+     */
+    @Transactional
+    public int releaseDueDeferred(int limit) {
+        int released = 0;
+        for (Notification deferred : notifications.lockDueDeferred(limit)) {
+            if (notifications.requeueDeferred(deferred.id(), clock.instant())) {
+                publish(deferred);
+                released++;
+            }
+        }
+        return released;
     }
 
     public Notification get(UUID id) {
         return notifications.findById(id).orElseThrow(() -> new NotificationNotFoundException(id));
+    }
+
+    /** Adds the outbox row that the outbox publisher sends to the channel's topic. */
+    private void publish(Notification notification) {
+        String payload = jsonMapper.writeValueAsString(NotificationMessage.from(notification));
+        outbox.insert(notification.id(), topicFor(notification.channel()), notification.userId(), payload,
+                clock.instant());
     }
 
     private CreateResult replay(String userId, IdempotencyKey key, String hash) {

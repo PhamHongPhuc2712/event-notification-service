@@ -18,9 +18,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -110,6 +114,54 @@ class EmailDeliveryIntegrationTest {
         publish(userId, message(id, userId, subject));
 
         await().atMost(TIMEOUT).until(() -> "SENT".equals(statusOf(id)));
+    }
+
+    @Test
+    void suppressesEmailWhenTheUserTurnedEmailOff() throws Exception {
+        String userId = uniqueUserId();
+        String subject = "Suppressed " + UUID.randomUUID();
+        UUID id = insertNotification(userId, subject, "QUEUED");
+        savePreferences(userId, "{SMS}", null, null, null);
+
+        publish(userId, message(id, userId, subject));
+
+        await().atMost(TIMEOUT).until(() -> "SUPPRESSED".equals(statusOf(id)));
+        assertThat(jdbc.sql("SELECT failure_reason FROM notifications WHERE id = :id")
+                .param("id", id).query(String.class).single()).isEqualTo("CHANNEL_DISABLED");
+        assertThat(mailpitSubjects()).doesNotContain(subject);
+    }
+
+    @Test
+    void defersEmailDuringQuietHoursUntilTheyEnd() throws Exception {
+        String userId = uniqueUserId();
+        String subject = "Deferred " + UUID.randomUUID();
+        UUID id = insertNotification(userId, subject, "QUEUED");
+        // A window from one hour ago to one hour from now, in UTC, is quiet right now.
+        LocalTime now = LocalTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MINUTES);
+        savePreferences(userId, "{EMAIL}", now.minusHours(1), now.plusHours(1), "UTC");
+
+        publish(userId, message(id, userId, subject));
+
+        await().atMost(TIMEOUT).until(() -> "DEFERRED".equals(statusOf(id)));
+        Instant deliverAfter = jdbc.sql("SELECT deliver_after FROM notifications WHERE id = :id")
+                .param("id", id).query(Timestamp.class).single().toInstant();
+        assertThat(Duration.between(Instant.now(), deliverAfter)).isBetween(Duration.ofMinutes(58),
+                Duration.ofMinutes(61));
+        assertThat(mailpitSubjects()).doesNotContain(subject);
+    }
+
+    private void savePreferences(String userId, String channels, LocalTime start, LocalTime end, String zone) {
+        jdbc.sql("""
+                        INSERT INTO user_preferences
+                            (user_id, allowed_channels, quiet_start, quiet_end, time_zone, updated_at)
+                        VALUES (:userId, CAST(:channels AS TEXT[]), :start, :end, :zone, now())
+                        """)
+                .param("userId", userId)
+                .param("channels", channels)
+                .param("start", start == null ? null : Time.valueOf(start))
+                .param("end", end == null ? null : Time.valueOf(end))
+                .param("zone", zone)
+                .update();
     }
 
     private UUID insertNotification(String userId, String subject, String status) {

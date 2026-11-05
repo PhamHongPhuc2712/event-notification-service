@@ -1,12 +1,15 @@
 package com.eventnotification.worker.delivery;
 
 import com.eventnotification.worker.config.WorkerProperties;
+import com.eventnotification.worker.preference.UserPreferences;
+import com.eventnotification.worker.preference.UserPreferencesRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,14 +28,16 @@ public class DeliveryService {
 
     private final NotificationStatusRepository statuses;
     private final DeliveryClaimRepository claims;
+    private final UserPreferencesRepository preferences;
     private final Duration claimLease;
     private final Clock clock;
     private final String workerId = UUID.randomUUID().toString();
 
     public DeliveryService(NotificationStatusRepository statuses, DeliveryClaimRepository claims,
-                           WorkerProperties properties, Clock clock) {
+                           UserPreferencesRepository preferences, WorkerProperties properties, Clock clock) {
         this.statuses = statuses;
         this.claims = claims;
+        this.preferences = preferences;
         this.claimLease = properties.delivery().claimLease();
         this.clock = clock;
     }
@@ -61,6 +66,11 @@ public class DeliveryService {
         if (skip.isPresent()) {
             return skip.get();
         }
+        // Only after claiming: otherwise one worker could defer a notification another is sending.
+        Optional<DeliveryOutcome> held = applyPreferences(message);
+        if (held.isPresent()) {
+            return held.get();
+        }
 
         try {
             sender.send(message);
@@ -76,6 +86,36 @@ public class DeliveryService {
         statuses.markSent(id, clock.instant());
         log.info("Sent {} notification {} to user {}", message.channel(), id, message.userId());
         return DeliveryOutcome.SENT;
+    }
+
+    /**
+     * Suppresses the notification if the user turned its channel off, or defers it until the
+     * user's quiet hours end. Preferences are read at delivery time, so a change made after the
+     * notification was created still applies.
+     */
+    private Optional<DeliveryOutcome> applyPreferences(NotificationMessage message) {
+        UUID id = message.notificationId();
+        UserPreferences preferences = this.preferences.find(message.userId()).orElse(null);
+        if (preferences == null) {
+            return Optional.empty();
+        }
+        Instant now = clock.instant();
+        if (!preferences.allows(message.channel())) {
+            statuses.markSuppressed(id, FailureCodes.CHANNEL_DISABLED, now);
+            log.info("Suppressed {} notification {}: user {} turned the channel off", message.channel(), id,
+                    message.userId());
+            return Optional.of(DeliveryOutcome.SUPPRESSED);
+        }
+        Optional<Instant> quietUntil = preferences.quietUntil(now);
+        if (quietUntil.isPresent()) {
+            statuses.markDeferred(id, quietUntil.get(), now);
+            // Free the claim, so the message released after quiet hours can be claimed at once.
+            release(id);
+            log.info("Deferred notification {} until {}: quiet hours for user {}", id, quietUntil.get(),
+                    message.userId());
+            return Optional.of(DeliveryOutcome.DEFERRED);
+        }
+        return Optional.empty();
     }
 
     /** Lets the retry claim straight away instead of waiting for the lease to expire. */

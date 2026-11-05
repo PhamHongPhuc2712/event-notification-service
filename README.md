@@ -88,6 +88,19 @@ body returns `422`.
 curl -i -X POST http://localhost:8080/notifications -H "Content-Type: application/json"   -H "Idempotency-Key: order-42-shipped"   -d '{"userId":"user-42","channel":"EMAIL","recipient":"alice@example.com","subject":"Your order shipped","body":"It arrives Friday."}'
 ```
 
+## User preferences
+
+Users can turn channels off and set quiet hours in their own time zone. Preferences are checked
+when a notification is delivered, so a change also applies to notifications already queued.
+A notification on a disabled channel ends as `SUPPRESSED`; one that arrives during quiet hours
+becomes `DEFERRED` with a `deliverAfter` time, and is sent when the quiet hours end.
+
+```bash
+curl -X PUT http://localhost:8080/users/user-42/preferences -H "Content-Type: application/json" \
+  -d '{"allowedChannels":["EMAIL"],"quietHours":{"start":"22:00","end":"07:00","timeZone":"Asia/Singapore"}}'
+curl http://localhost:8080/users/user-42/preferences   # every channel, no quiet hours, if never set
+```
+
 ## Failures, retries and replay
 
 A send that fails for a reason a retry may fix moves through `<topic>-retry-0` … `-retry-4`

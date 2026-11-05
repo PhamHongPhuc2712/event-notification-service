@@ -14,10 +14,12 @@ public record Notification(
         String failureReason,
         Instant createdAt,
         Instant updatedAt,
-        Instant sentAt) {
+        Instant sentAt,
+        /** When a DEFERRED notification is released; null otherwise. */
+        Instant deliverAfter) {
 
     public static Notification queued(CreateNotificationRequest request, Instant now) {
         return new Notification(UUID.randomUUID(), request.userId(), request.channel(), request.recipient(),
-                request.subject(), request.body(), NotificationStatus.QUEUED, null, now, now, null);
+                request.subject(), request.body(), NotificationStatus.QUEUED, null, now, now, null, null);
     }
 }

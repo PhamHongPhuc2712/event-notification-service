@@ -34,6 +34,9 @@ notifications:
     poll-interval: 200ms
     batch-size: 100
     send-timeout: 10s
+  deferred:
+    poll-interval: 5s
+    batch-size: 500
 
 management:
   endpoints:

@@ -11,11 +11,16 @@ import java.time.Duration;
 
 @Validated
 @ConfigurationProperties("notifications")
-public record NotificationProperties(@Valid @NotNull Topics topics, @Valid @NotNull Outbox outbox) {
+public record NotificationProperties(@Valid @NotNull Topics topics, @Valid @NotNull Outbox outbox,
+                                     @Valid @NotNull Deferred deferred) {
 
     public record Topics(@NotBlank String email, @NotBlank String sms, @Min(1) int partitions) {
     }
 
     public record Outbox(@NotNull Duration pollInterval, @Min(1) int batchSize, @NotNull Duration sendTimeout) {
+    }
+
+    /** How often, and how many at a time, DEFERRED notifications are released after quiet hours. */
+    public record Deferred(@NotNull Duration pollInterval, @Min(1) int batchSize) {
     }
 }

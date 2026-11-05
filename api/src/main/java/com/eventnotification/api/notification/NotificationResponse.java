@@ -13,10 +13,11 @@ public record NotificationResponse(
         String failureReason,
         Instant createdAt,
         Instant updatedAt,
-        Instant sentAt) {
+        Instant sentAt,
+        Instant deliverAfter) {
 
     static NotificationResponse from(Notification n) {
         return new NotificationResponse(n.id(), n.userId(), n.channel(), n.recipient(), n.subject(), n.status(),
-                n.failureReason(), n.createdAt(), n.updatedAt(), n.sentAt());
+                n.failureReason(), n.createdAt(), n.updatedAt(), n.sentAt(), n.deliverAfter());
     }
 }

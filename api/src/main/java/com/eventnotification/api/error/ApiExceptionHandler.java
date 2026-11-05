@@ -3,6 +3,7 @@ package com.eventnotification.api.error;
 import com.eventnotification.api.idempotency.IdempotencyKeyReusedException;
 import com.eventnotification.api.idempotency.InvalidIdempotencyKeyException;
 import com.eventnotification.api.notification.NotificationNotFoundException;
+import com.eventnotification.api.notification.UserIds;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -26,6 +27,11 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(NotificationNotFoundException.class)
     ProblemDetail handleNotFound(NotificationNotFoundException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    @ExceptionHandler(UserIds.InvalidUserIdException.class)
+    ProblemDetail handleInvalidUserId(UserIds.InvalidUserIdException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
     }
 
     @ExceptionHandler(InvalidIdempotencyKeyException.class)

@@ -9,6 +9,8 @@ public final class FailureCodes {
     public static final String REJECTED_BY_PROVIDER = "REJECTED_BY_PROVIDER";
     /** Every retry failed and the message went to the dead-letter topic. It can be replayed. */
     public static final String RETRIES_EXHAUSTED = "RETRIES_EXHAUSTED";
+    /** Not a failure: the user turned this channel off, so the notification was SUPPRESSED. */
+    public static final String CHANNEL_DISABLED = "CHANNEL_DISABLED";
 
     private FailureCodes() {
     }

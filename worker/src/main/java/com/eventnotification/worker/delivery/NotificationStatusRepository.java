@@ -64,4 +64,33 @@ public class NotificationStatusRepository {
                 .param("now", Timestamp.from(now))
                 .update() == 1;
     }
+
+    /** Moves QUEUED to SUPPRESSED, with the reason. Returns false if the notification was not QUEUED. */
+    public boolean markSuppressed(UUID id, String reason, Instant now) {
+        return jdbc.sql("""
+                        UPDATE notifications
+                        SET status = 'SUPPRESSED', failure_reason = :reason, updated_at = :now
+                        WHERE id = :id AND status = 'QUEUED'
+                        """)
+                .param("id", id)
+                .param("reason", reason)
+                .param("now", Timestamp.from(now))
+                .update() == 1;
+    }
+
+    /**
+     * Moves QUEUED to DEFERRED until {@code deliverAfter}, when the api module queues it again.
+     * Returns false if the notification was not QUEUED.
+     */
+    public boolean markDeferred(UUID id, Instant deliverAfter, Instant now) {
+        return jdbc.sql("""
+                        UPDATE notifications
+                        SET status = 'DEFERRED', deliver_after = :deliverAfter, updated_at = :now
+                        WHERE id = :id AND status = 'QUEUED'
+                        """)
+                .param("id", id)
+                .param("deliverAfter", Timestamp.from(deliverAfter))
+                .param("now", Timestamp.from(now))
+                .update() == 1;
+    }
 }

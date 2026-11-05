@@ -1,13 +1,18 @@
 package com.eventnotification.worker.delivery;
 
 import com.eventnotification.worker.TestWorkerProperties;
+import com.eventnotification.worker.preference.QuietHours;
+import com.eventnotification.worker.preference.UserPreferences;
+import com.eventnotification.worker.preference.UserPreferencesRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,8 +34,9 @@ class DeliveryServiceTest {
     private final ChannelSender sender = mock(ChannelSender.class);
     private final NotificationStatusRepository statuses = mock(NotificationStatusRepository.class);
     private final DeliveryClaimRepository claims = mock(DeliveryClaimRepository.class);
-    private final DeliveryService service = new DeliveryService(statuses, claims, TestWorkerProperties.create(),
-            Clock.fixed(NOW, ZoneOffset.UTC));
+    private final UserPreferencesRepository preferences = mock(UserPreferencesRepository.class);
+    private final DeliveryService service = new DeliveryService(statuses, claims, preferences,
+            TestWorkerProperties.create(), Clock.fixed(NOW, ZoneOffset.UTC));
 
     private final NotificationMessage message = new NotificationMessage(UUID.randomUUID(), "user-1", "EMAIL",
             "bob@example.com", "Hello", "Body text", NOW);
@@ -120,6 +126,58 @@ class DeliveryServiceTest {
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
 
         verify(sender, never()).send(any());
+    }
+
+    @Test
+    void suppressesNotificationOnAChannelTheUserTurnedOff() {
+        givenQueuedAndClaimable();
+        givenPreferences(new UserPreferences(Set.of("SMS"), Optional.empty()));
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SUPPRESSED);
+
+        verify(statuses).markSuppressed(message.notificationId(), FailureCodes.CHANNEL_DISABLED, NOW);
+        verify(sender, never()).send(any());
+        verify(statuses, never()).markSent(any(), any());
+    }
+
+    @Test
+    void defersNotificationUntilQuietHoursEnd() {
+        givenQueuedAndClaimable();
+        // NOW is 12:00 UTC, inside 11:00-13:00.
+        givenPreferences(new UserPreferences(Set.of("EMAIL"),
+                Optional.of(new QuietHours(LocalTime.of(11, 0), LocalTime.of(13, 0), ZoneOffset.UTC))));
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.DEFERRED);
+
+        verify(statuses).markDeferred(message.notificationId(), Instant.parse("2026-10-30T13:00:00Z"), NOW);
+        verify(claims).release(eq(message.notificationId()), anyString());
+        verify(sender, never()).send(any());
+    }
+
+    @Test
+    void sendsOnAnAllowedChannelOutsideQuietHours() {
+        givenQueuedAndClaimable();
+        givenPreferences(new UserPreferences(Set.of("EMAIL"),
+                Optional.of(new QuietHours(LocalTime.of(22, 0), LocalTime.of(7, 0), ZoneOffset.UTC))));
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SENT);
+
+        verify(sender).send(message);
+    }
+
+    @Test
+    void doesNotApplyPreferencesBeforeWinningTheClaim() {
+        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("QUEUED"));
+        when(claims.tryClaim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(false);
+        givenPreferences(new UserPreferences(Set.of(), Optional.empty()));
+
+        assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(TransientDeliveryException.class);
+
+        verify(statuses, never()).markSuppressed(any(), anyString(), any());
+    }
+
+    private void givenPreferences(UserPreferences userPreferences) {
+        when(preferences.find(message.userId())).thenReturn(Optional.of(userPreferences));
     }
 
     private void givenQueuedAndClaimable() {

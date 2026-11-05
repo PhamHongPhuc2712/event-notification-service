@@ -62,6 +62,7 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Publishing | Transactional outbox | Avoids the dual-write problem between Postgres and Kafka | Publish directly after commit |
 | Dedupe store | Postgres unique constraint | Durable and transactional with the status update | Redis with TTL |
 | Rate limiting | Redis token bucket in Lua | Atomic across many workers | In-memory per worker |
+| Quiet hours | DEFERRED rows released by a scheduled job | Kafka has no per-message delay of hours | Delay topics per hour; consumer pause |
 | Retries | Retry topics with per-record jitter, then a dead-letter topic | A failing record does not stall its partition | Blocking retries in place |
 | SMS duplicates | Provider idempotency key = notification ID | A timed-out send can be retried safely | Never retry a timeout (loses messages) |
 
@@ -139,6 +140,22 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **Temporary versus permanent email failures.** Only a refusal from the mail server, such as
   an unknown mailbox, marks a notification FAILED. Connection errors and timeouts are retried,
   because marking them FAILED would make the status final and block any later retry.
+- **Preferences are applied at delivery time, by the worker.** Checking them when the API
+  accepts a notification would be simpler, but a user who turns SMS off at 9pm expects the
+  SMS still queued from 8:59pm not to arrive. The worker checks them only after winning the
+  claim: if it checked first, one worker could mark a notification DEFERRED while another was
+  already sending it, and the released copy would be sent a second time. A disabled channel
+  ends as SUPPRESSED (`CHANNEL_DISABLED`), which is final; turning the channel back on does
+  not resurrect old notifications.
+- **Quiet hours defer, they do not drop.** During quiet hours the worker marks the
+  notification DEFERRED with `deliver_after` set to the end of the window, computed in the
+  user's time zone (an end time skipped by a daylight-saving change moves to just after the
+  gap). Kafka cannot delay a single message for hours, so a scheduled job in the API, which owns
+  the outbox, moves due notifications back to QUEUED and adds a new outbox row in one
+  transaction. It uses `FOR UPDATE SKIP LOCKED`, like the outbox publisher, and the database
+  clock. The worker checks the preferences again when the released message arrives, so a
+  user who lengthens their quiet hours in the meantime is deferred again. Nothing yet lets an
+  urgent notification, such as a password reset, skip quiet hours; that comes with priorities.
 - **Public failure reasons are codes.** The API returns `RECIPIENT_REJECTED`,
   `REJECTED_BY_PROVIDER` or `RETRIES_EXHAUSTED`, never the raw provider error, which can reveal
   internal hostnames and ports. The full error goes to the logs. For SMS, a `400` is a rejected
