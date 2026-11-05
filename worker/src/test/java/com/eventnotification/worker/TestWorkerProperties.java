@@ -14,13 +14,22 @@ public final class TestWorkerProperties {
     private TestWorkerProperties() {
     }
 
+    /** A test-only signing secret, the same one application-test.yml uses. */
+    public static final String WEBHOOK_SECRET = "whsec_gFEooYrtFboec/3WTK9KEtPSZFiJhs36b+clSo+96IA=";
+
+    public static WorkerProperties.Webhook webhook(boolean allowPrivateTargets) {
+        return new WorkerProperties.Webhook(WEBHOOK_SECRET, Duration.ofSeconds(1), Duration.ofSeconds(1),
+                allowPrivateTargets);
+    }
+
     public static WorkerProperties create() {
         return new WorkerProperties(
-                new WorkerProperties.Topics("notifications.email", "notifications.sms", 6),
-                new WorkerProperties.Consumer("email-worker", "sms-worker", 1, 1),
+                new WorkerProperties.Topics("notifications.email", "notifications.sms", "notifications.webhook", 6),
+                new WorkerProperties.Consumer("email-worker", "sms-worker", "webhook-worker", 1, 1),
                 new WorkerProperties.Mail("no-reply@example.com"),
                 new WorkerProperties.Sms(URI.create("http://localhost:8082"), Duration.ofSeconds(1),
                         Duration.ofSeconds(1)),
+                webhook(true),
                 new WorkerProperties.Delivery(CLAIM_LEASE),
                 new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3, Duration.ofSeconds(60), Duration.ofSeconds(1)),
                 new WorkerProperties.RateLimit(true, Duration.ofHours(1),

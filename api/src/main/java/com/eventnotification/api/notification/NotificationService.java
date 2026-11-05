@@ -118,6 +118,7 @@ public class NotificationService {
         return switch (channel) {
             case EMAIL -> properties.topics().email();
             case SMS -> properties.topics().sms();
+            case WEBHOOK -> properties.topics().webhook();
         };
     }
 }

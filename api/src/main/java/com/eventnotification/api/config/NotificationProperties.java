@@ -14,7 +14,8 @@ import java.time.Duration;
 public record NotificationProperties(@Valid @NotNull Topics topics, @Valid @NotNull Outbox outbox,
                                      @Valid @NotNull Deferred deferred) {
 
-    public record Topics(@NotBlank String email, @NotBlank String sms, @Min(1) int partitions) {
+    public record Topics(@NotBlank String email, @NotBlank String sms, @NotBlank String webhook,
+                         @Min(1) int partitions) {
     }
 
     public record Outbox(@NotNull Duration pollInterval, @Min(1) int batchSize, @NotNull Duration sendTimeout) {

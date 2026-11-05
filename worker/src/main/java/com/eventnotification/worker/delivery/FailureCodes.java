@@ -7,6 +7,8 @@ public final class FailureCodes {
     public static final String RECIPIENT_REJECTED = "RECIPIENT_REJECTED";
     /** The provider refused the request for another reason that retrying cannot fix. */
     public static final String REJECTED_BY_PROVIDER = "REJECTED_BY_PROVIDER";
+    /** The webhook URL is not allowed, such as http or a private address. */
+    public static final String TARGET_NOT_ALLOWED = "TARGET_NOT_ALLOWED";
     /** Every retry failed and the message went to the dead-letter topic. It can be replayed. */
     public static final String RETRIES_EXHAUSTED = "RETRIES_EXHAUSTED";
     /** Not a failure: the user turned this channel off, so the notification was SUPPRESSED. */

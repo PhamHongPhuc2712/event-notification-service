@@ -27,6 +27,16 @@ class AppConfig {
         return topic(properties.topics().sms(), properties);
     }
 
+    @Bean
+    NewTopic webhookTopic(NotificationProperties properties) {
+        return topic(properties.topics().webhook(), properties);
+    }
+
+    @Bean
+    NewTopic webhookHighPriorityTopic(NotificationProperties properties) {
+        return topic(Priority.HIGH.topic(properties.topics().webhook()), properties);
+    }
+
     /** HIGH-priority topics have their own consumers, so a backlog on the normal topic cannot delay them. */
     @Bean
     NewTopic emailHighPriorityTopic(NotificationProperties properties) {

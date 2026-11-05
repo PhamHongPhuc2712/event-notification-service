@@ -49,11 +49,13 @@ notifications:
   topics:
     email: notifications.email
     sms: notifications.sms
+    webhook: notifications.webhook
     # Retry topics get the same partition count, so a retried record keeps its partition.
     partitions: 6
   consumer:
     email-group: email-worker
     sms-group: sms-worker
+    webhook-group: webhook-worker
     concurrency: 3
     high-priority-concurrency: 2
   mail:
@@ -62,6 +64,13 @@ notifications:
     base-url: ${MOCK_SMS_URL:http://localhost:8082}
     connect-timeout: 2s
     read-timeout: 5s
+  webhook:
+    # Required. Kept in infra/.env locally; never commit a real one.
+    signing-secret: ${WEBHOOK_SIGNING_SECRET}
+    connect-timeout: 2s
+    read-timeout: 5s
+    # Set to true only on a developer machine, to deliver to http://localhost receivers.
+    allow-private-targets: ${WEBHOOK_ALLOW_PRIVATE_TARGETS:false}
   delivery:
     # Longer than any one send (SMTP worst case 25s, SMS 7s), and shorter than the total
     # retry schedule, so a later retry can take over a dead worker's claim.

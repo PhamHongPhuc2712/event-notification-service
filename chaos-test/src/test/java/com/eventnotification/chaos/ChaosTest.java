@@ -218,6 +218,8 @@ class ChaosTest {
                 // A dead worker's partitions move after 6s, and its claims expire after 10s.
                 "--spring.kafka.consumer.properties.session.timeout.ms=6000",
                 "--spring.kafka.consumer.properties.heartbeat.interval.ms=2000",
+                // A test-only secret; this run sends no webhooks, but workers need one to start.
+                "--notifications.webhook.signing-secret=whsec_gFEooYrtFboec/3WTK9KEtPSZFiJhs36b+clSo+96IA=",
                 "--notifications.delivery.claim-lease=10s",
                 "--notifications.sms.base-url=" + mockSms.baseUrl(),
                 "--notifications.sms.read-timeout=2s",

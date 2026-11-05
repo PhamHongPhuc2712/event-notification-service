@@ -8,6 +8,10 @@ spring:
 
 # Short delays so retry and dead-letter tests finish in seconds.
 notifications:
+  webhook:
+    # A test-only secret; the tests deliver to a receiver on 127.0.0.1.
+    signing-secret: whsec_gFEooYrtFboec/3WTK9KEtPSZFiJhs36b+clSo+96IA=
+    allow-private-targets: true
   sms:
     connect-timeout: 1s
     read-timeout: 1s

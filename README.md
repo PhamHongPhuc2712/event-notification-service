@@ -88,6 +88,24 @@ body returns `422`.
 curl -i -X POST http://localhost:8080/notifications -H "Content-Type: application/json"   -H "Idempotency-Key: order-42-shipped"   -d '{"userId":"user-42","channel":"EMAIL","recipient":"alice@example.com","subject":"Your order shipped","body":"It arrives Friday."}'
 ```
 
+## Webhooks
+
+`"channel":"WEBHOOK"` POSTs the notification to the recipient URL, signed the way the
+[Standard Webhooks](https://www.standardwebhooks.com) spec describes, so receivers can verify it
+with any Standard Webhooks library. Every request carries `webhook-id` (the notification ID, the
+same on every retry, so receivers can drop repeats), `webhook-timestamp` and
+`webhook-signature: v1,<base64 HMAC-SHA256 of id.timestamp.body>`. The subject becomes the event
+`type`.
+
+```bash
+curl -i -X POST http://localhost:8080/notifications -H "Content-Type: application/json" \
+  -d '{"userId":"user-42","channel":"WEBHOOK","recipient":"https://example.com/hooks","subject":"order.shipped","body":"{\"orderId\":42}"}'
+```
+
+The signing secret is `WEBHOOK_SIGNING_SECRET` in `infra/.env`. Webhook URLs must be https and
+resolve to public addresses; to test against a receiver on your machine, start the worker with
+`WEBHOOK_ALLOW_PRIVATE_TARGETS=true` and use `http://localhost:<port>/...`.
+
 ## User preferences
 
 Users can turn channels off and set quiet hours in their own time zone. Preferences are checked

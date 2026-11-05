@@ -142,6 +142,18 @@ class NotificationApiIntegrationTest {
             // email to a phone number
             """
             {"userId":"u1","channel":"EMAIL","recipient":"+6591234567","subject":"s","body":"b"}""",
+            // webhook over plain http to a public host
+            """
+            {"userId":"u1","channel":"WEBHOOK","recipient":"http://example.com/hook","body":"b"}""",
+            // webhook URL with credentials
+            """
+            {"userId":"u1","channel":"WEBHOOK","recipient":"https://user:pass@example.com/hook","body":"b"}""",
+            // webhook that is not a URL
+            """
+            {"userId":"u1","channel":"WEBHOOK","recipient":"example.com/hook","body":"b"}""",
+            // webhook with another scheme
+            """
+            {"userId":"u1","channel":"WEBHOOK","recipient":"ftp://example.com/hook","body":"b"}""",
             // unknown channel
             """
             {"userId":"u1","channel":"PIGEON","recipient":"a@example.com","subject":"s","body":"b"}""",
@@ -196,6 +208,24 @@ class NotificationApiIntegrationTest {
         ConsumerRecord<String, String> record = awaitRecordFor(idOf(result), SMS_TOPIC + ".high");
 
         assertThat(jsonMapper.readTree(record.value()).get("priority").asString()).isEqualTo("HIGH");
+    }
+
+    @Test
+    void webhookIsAcceptedAndPublishedToTheWebhookTopic() throws Exception {
+        String userId = uniqueUserId();
+        MvcResult result = mockMvc.perform(post("/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonMapper.writeValueAsString(Map.of(
+                                "userId", userId, "channel", "WEBHOOK",
+                                "recipient", "https://hooks.example.com/orders?source=ens",
+                                "subject", "order.shipped", "body", "{\"orderId\":42}"))))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.channel").value("WEBHOOK"))
+                .andReturn();
+
+        ConsumerRecord<String, String> record = awaitRecordFor(idOf(result), "notifications.webhook");
+
+        assertThat(record.key()).isEqualTo(userId);
     }
 
     @Test

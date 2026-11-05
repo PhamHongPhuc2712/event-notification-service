@@ -49,7 +49,7 @@ class UserPreferencesApiIntegrationTest {
     void userWithoutPreferencesGetsTheDefaults() throws Exception {
         mockMvc.perform(get("/users/{userId}/preferences", uniqueUserId()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.allowedChannels", containsInAnyOrder("EMAIL", "SMS")))
+                .andExpect(jsonPath("$.allowedChannels", containsInAnyOrder("EMAIL", "SMS", "WEBHOOK")))
                 .andExpect(jsonPath("$.quietHours").value(nullValue()));
     }
 

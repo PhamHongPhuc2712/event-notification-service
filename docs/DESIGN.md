@@ -65,6 +65,7 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Rate limiting | Redis token bucket in Lua, with reserved slots | Atomic across many workers; a burst drains without retry storms | In-memory per worker; Redis INCR fixed windows |
 | Quiet hours | DEFERRED rows released by a scheduled job | Kafka has no per-message delay of hours | Delay topics per hour; consumer pause |
 | Retries | Retry topics with per-record jitter, then a dead-letter topic | A failing record does not stall its partition | Blocking retries in place |
+| Webhook signing | Standard Webhooks (HMAC-SHA256 over id.timestamp.body) | Interoperable, replay-resistant, testable against the spec | Signing the body only; home-made headers |
 | SMS duplicates | Provider idempotency key = notification ID | A timed-out send can be retried safely | Never retry a timeout (loses messages) |
 
 ## Tradeoffs and open questions
@@ -157,6 +158,28 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   clock. The worker checks the preferences again when the released message arrives, so a
   user who lengthens their quiet hours in the meantime is deferred again. HIGH-priority
   notifications skip quiet hours.
+- **Webhooks follow the Standard Webhooks spec instead of a home-made scheme.** The signature
+  covers `id.timestamp.body`, not just the body: with the timestamp signed, a receiver can
+  reject anything older than a few minutes, so a captured request cannot be replayed later,
+  and with the ID signed it cannot be replayed under another ID. A unit test checks the signer
+  against the spec's published example, so off-the-shelf verifiers accept our signatures. The
+  ID is the notification ID and stays fixed across retries, which gives receivers the same
+  dedupe key the SMS provider gets; the timestamp is per attempt. One secret signs every
+  webhook; per-receiver secrets, and signing with two secrets during a rotation (the header
+  allows several signatures), come once receivers can register endpoints.
+- **Webhook URLs are checked against SSRF when sending, not only when accepting.** A webhook
+  lets any caller make the worker send a POST anywhere, including
+  `http://169.254.169.254/` for cloud credentials or the database host. The API checks only the
+  URL's shape; the worker requires https, resolves the host and refuses if any address is
+  loopback, private, link-local, carrier-grade NAT or IPv6 unique-local, marking the
+  notification FAILED with `TARGET_NOT_ALLOWED`. Checking at send time matters because DNS can
+  change after the API accepted the URL. Redirects are never followed, since a 302 to an
+  internal address would bypass the check. The gap that remains is DNS rebinding: the HTTP
+  client resolves the name again when connecting. The JDK client has no hook to connect to
+  the checked address, so the real fix is an egress proxy that enforces the same rules.
+- **Webhook responses: 2xx delivered; 408, 429, 5xx and timeouts retried; anything else final.**
+  A 3xx is final because redirects are not followed; a 410 Gone or a 401 will not change on a
+  retry.
 - **Priority is a separate topic, not a priority queue.** Kafka has no message priorities, and a
   partition is read in order, so a password reset behind 50,000 marketing emails waits for all
   of them. HIGH notifications go to `<topic>.high` instead, read by a separate consumer group

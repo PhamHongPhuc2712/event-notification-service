@@ -41,7 +41,7 @@ class OutboxPublisherTest {
     @BeforeEach
     void setUp() {
         NotificationProperties properties = new NotificationProperties(
-                new NotificationProperties.Topics("notifications.email", "notifications.sms", 6),
+                new NotificationProperties.Topics("notifications.email", "notifications.sms", "notifications.webhook", 6),
                 new NotificationProperties.Outbox(Duration.ofMillis(200), 100, Duration.ofSeconds(1)),
                 new NotificationProperties.Deferred(Duration.ofSeconds(1), 100));
         publisher = new OutboxPublisher(outbox, kafka, new TransactionTemplate(txManager), properties,
