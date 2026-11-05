@@ -4,6 +4,8 @@ import com.eventnotification.worker.TestWorkerProperties;
 import com.eventnotification.worker.preference.QuietHours;
 import com.eventnotification.worker.preference.UserPreferences;
 import com.eventnotification.worker.preference.UserPreferencesRepository;
+import com.eventnotification.worker.ratelimit.RateLimiter;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -35,11 +37,17 @@ class DeliveryServiceTest {
     private final NotificationStatusRepository statuses = mock(NotificationStatusRepository.class);
     private final DeliveryClaimRepository claims = mock(DeliveryClaimRepository.class);
     private final UserPreferencesRepository preferences = mock(UserPreferencesRepository.class);
-    private final DeliveryService service = new DeliveryService(statuses, claims, preferences,
+    private final RateLimiter rateLimiter = mock(RateLimiter.class);
+    private final DeliveryService service = new DeliveryService(statuses, claims, preferences, rateLimiter,
             TestWorkerProperties.create(), Clock.fixed(NOW, ZoneOffset.UTC));
 
     private final NotificationMessage message = new NotificationMessage(UUID.randomUUID(), "user-1", "EMAIL",
             "bob@example.com", "Hello", "Body text", NOW);
+
+    @BeforeEach
+    void notRateLimited() {
+        when(rateLimiter.acquire(anyString(), anyString())).thenReturn(RateLimiter.Decision.NOW);
+    }
 
     @Test
     void sendsQueuedNotificationAndMarksItSent() {
@@ -174,6 +182,62 @@ class DeliveryServiceTest {
         assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(TransientDeliveryException.class);
 
         verify(statuses, never()).markSuppressed(any(), anyString(), any());
+    }
+
+    @Test
+    void defersARateLimitedNotificationToItsReservedSlot() {
+        givenQueuedAndClaimable();
+        when(rateLimiter.acquire("user-1", "EMAIL"))
+                .thenReturn(new RateLimiter.Decision(RateLimiter.Outcome.LATER, Duration.ofSeconds(12)));
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.DEFERRED);
+
+        verify(statuses).markDeferredForRateLimit(message.notificationId(), NOW.plusSeconds(12), NOW);
+        verify(claims).release(eq(message.notificationId()), anyString());
+        verify(sender, never()).send(any());
+    }
+
+    @Test
+    void suppressesANotificationWhoseSlotIsTooFarAway() {
+        givenQueuedAndClaimable();
+        when(rateLimiter.acquire("user-1", "EMAIL"))
+                .thenReturn(new RateLimiter.Decision(RateLimiter.Outcome.REJECTED, Duration.ofHours(2)));
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SUPPRESSED);
+
+        verify(statuses).markSuppressed(message.notificationId(), FailureCodes.RATE_LIMITED, NOW);
+        verify(sender, never()).send(any());
+    }
+
+    @Test
+    void notificationWithAReservedSlotDoesNotTakeAnotherToken() {
+        givenQueuedAndClaimable();
+        when(statuses.hasRateLimitSlot(message.notificationId())).thenReturn(true);
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SENT);
+
+        verify(rateLimiter, never()).acquire(anyString(), anyString());
+    }
+
+    @Test
+    void failedSendKeepsItsTokenForTheRetry() {
+        givenQueuedAndClaimable();
+        doThrow(new TransientDeliveryException("provider down", null)).when(sender).send(message);
+
+        assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(TransientDeliveryException.class);
+
+        verify(statuses).markRateLimitSlotTaken(message.notificationId());
+    }
+
+    @Test
+    void quietHoursAreCheckedBeforeTakingAToken() {
+        givenQueuedAndClaimable();
+        givenPreferences(new UserPreferences(Set.of("EMAIL"),
+                Optional.of(new QuietHours(LocalTime.of(11, 0), LocalTime.of(13, 0), ZoneOffset.UTC))));
+
+        service.deliver(message, sender);
+
+        verify(rateLimiter, never()).acquire(anyString(), anyString());
     }
 
     private void givenPreferences(UserPreferences userPreferences) {

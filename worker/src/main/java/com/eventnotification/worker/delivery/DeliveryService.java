@@ -3,6 +3,7 @@ package com.eventnotification.worker.delivery;
 import com.eventnotification.worker.config.WorkerProperties;
 import com.eventnotification.worker.preference.UserPreferences;
 import com.eventnotification.worker.preference.UserPreferencesRepository;
+import com.eventnotification.worker.ratelimit.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,15 +30,18 @@ public class DeliveryService {
     private final NotificationStatusRepository statuses;
     private final DeliveryClaimRepository claims;
     private final UserPreferencesRepository preferences;
+    private final RateLimiter rateLimiter;
     private final Duration claimLease;
     private final Clock clock;
     private final String workerId = UUID.randomUUID().toString();
 
     public DeliveryService(NotificationStatusRepository statuses, DeliveryClaimRepository claims,
-                           UserPreferencesRepository preferences, WorkerProperties properties, Clock clock) {
+                           UserPreferencesRepository preferences, RateLimiter rateLimiter,
+                           WorkerProperties properties, Clock clock) {
         this.statuses = statuses;
         this.claims = claims;
         this.preferences = preferences;
+        this.rateLimiter = rateLimiter;
         this.claimLease = properties.delivery().claimLease();
         this.clock = clock;
     }
@@ -71,6 +75,16 @@ public class DeliveryService {
         if (held.isPresent()) {
             return held.get();
         }
+        // After the preferences, so a notification held for quiet hours does not use up a token.
+        boolean tookToken = false;
+        if (!statuses.hasRateLimitSlot(id)) {
+            RateLimiter.Decision decision = rateLimiter.acquire(message.userId(), message.channel());
+            held = applyRateLimit(message, decision);
+            if (held.isPresent()) {
+                return held.get();
+            }
+            tookToken = true;
+        }
 
         try {
             sender.send(message);
@@ -79,6 +93,9 @@ public class DeliveryService {
             statuses.markFailed(id, e.failureCode(), clock.instant());
             return DeliveryOutcome.FAILED;
         } catch (RuntimeException e) {
+            if (tookToken) {
+                keepRateLimitSlot(id);
+            }
             release(id);
             throw e;
         }
@@ -116,6 +133,41 @@ public class DeliveryService {
             return Optional.of(DeliveryOutcome.DEFERRED);
         }
         return Optional.empty();
+    }
+
+    /**
+     * Defers the notification to its reserved slot, or suppresses it if the next slot is beyond
+     * the longest allowed wait. Empty means a token was taken and the notification can go now.
+     */
+    private Optional<DeliveryOutcome> applyRateLimit(NotificationMessage message, RateLimiter.Decision decision) {
+        UUID id = message.notificationId();
+        Instant now = clock.instant();
+        return switch (decision.outcome()) {
+            case NOW -> Optional.empty();
+            case LATER -> {
+                Instant slot = now.plus(decision.delay());
+                statuses.markDeferredForRateLimit(id, slot, now);
+                release(id);
+                log.info("Rate limited notification {} for user {}; deferred to its slot at {}", id,
+                        message.userId(), slot);
+                yield Optional.of(DeliveryOutcome.DEFERRED);
+            }
+            case REJECTED -> {
+                statuses.markSuppressed(id, FailureCodes.RATE_LIMITED, now);
+                log.warn("Suppressed notification {}: user {} is {} over their {} rate limit", id,
+                        message.userId(), decision.delay(), message.channel());
+                yield Optional.of(DeliveryOutcome.SUPPRESSED);
+            }
+        };
+    }
+
+    /** A retry of a send that already took a token must not take another one. */
+    private void keepRateLimitSlot(UUID id) {
+        try {
+            statuses.markRateLimitSlotTaken(id);
+        } catch (RuntimeException e) {
+            log.warn("Could not record the rate-limit slot of notification {}; its retry takes a new one", id, e);
+        }
     }
 
     /** Lets the retry claim straight away instead of waiting for the lease to expire. */

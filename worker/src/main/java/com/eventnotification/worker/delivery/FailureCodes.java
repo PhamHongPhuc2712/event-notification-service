@@ -11,6 +11,8 @@ public final class FailureCodes {
     public static final String RETRIES_EXHAUSTED = "RETRIES_EXHAUSTED";
     /** Not a failure: the user turned this channel off, so the notification was SUPPRESSED. */
     public static final String CHANNEL_DISABLED = "CHANNEL_DISABLED";
+    /** Not sent: the user's rate limit would have delayed it beyond the longest allowed wait. */
+    public static final String RATE_LIMITED = "RATE_LIMITED";
 
     private FailureCodes() {
     }

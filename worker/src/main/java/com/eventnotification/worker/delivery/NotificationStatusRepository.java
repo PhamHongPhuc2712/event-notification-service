@@ -65,6 +65,39 @@ public class NotificationStatusRepository {
                 .update() == 1;
     }
 
+    /** True if a rate-limit slot was already taken for this notification, so it must not take another. */
+    public boolean hasRateLimitSlot(UUID id) {
+        return jdbc.sql("SELECT rate_limit_reserved FROM notifications WHERE id = :id")
+                .param("id", id)
+                .query(Boolean.class)
+                .optional()
+                .orElse(false);
+    }
+
+    /** Records that this notification holds a rate-limit slot, for example before a send is retried. */
+    public void markRateLimitSlotTaken(UUID id) {
+        jdbc.sql("UPDATE notifications SET rate_limit_reserved = TRUE WHERE id = :id")
+                .param("id", id)
+                .update();
+    }
+
+    /**
+     * Moves QUEUED to DEFERRED until a reserved rate-limit slot, and records the reservation so
+     * the released notification does not take a second slot.
+     */
+    public boolean markDeferredForRateLimit(UUID id, Instant deliverAfter, Instant now) {
+        return jdbc.sql("""
+                        UPDATE notifications
+                        SET status = 'DEFERRED', deliver_after = :deliverAfter, rate_limit_reserved = TRUE,
+                            updated_at = :now
+                        WHERE id = :id AND status = 'QUEUED'
+                        """)
+                .param("id", id)
+                .param("deliverAfter", Timestamp.from(deliverAfter))
+                .param("now", Timestamp.from(now))
+                .update() == 1;
+    }
+
     /** Moves QUEUED to SUPPRESSED, with the reason. Returns false if the notification was not QUEUED. */
     public boolean markSuppressed(UUID id, String reason, Instant now) {
         return jdbc.sql("""

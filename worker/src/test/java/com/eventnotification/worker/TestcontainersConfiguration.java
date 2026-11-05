@@ -11,7 +11,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import java.io.IOException;
 
 /**
- * Real Postgres, Kafka and Mailpit for tests, using the same image versions as
+ * Real Postgres, Kafka, Redis and Mailpit for tests, using the same image versions as
  * infra/docker-compose.yml, plus a scriptable fake SMS provider.
  */
 @TestConfiguration(proxyBeanMethods = false)
@@ -30,6 +30,12 @@ public class TestcontainersConfiguration {
     @ServiceConnection
     KafkaContainer kafka() {
         return new KafkaContainer("apache/kafka:4.3.2");
+    }
+
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer<?> redis() {
+        return new GenericContainer<>("redis:7.4.12-alpine").withExposedPorts(6379);
     }
 
     @Bean

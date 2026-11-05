@@ -28,6 +28,11 @@ spring:
       # Offsets are committed only after the listener returns for the whole poll batch. A
       # failed record is committed only once it has been published to a retry topic.
       ack-mode: batch
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
@@ -60,6 +65,18 @@ notifications:
     # Longer than any one send (SMTP worst case 25s, SMS 7s), and shorter than the total
     # retry schedule, so a later retry can take over a dead worker's claim.
     claim-lease: ${CLAIM_LEASE:60s}
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    # A user over their limit waits for the next free slot, up to this long; beyond it the
+    # notification is suppressed rather than queued for hours.
+    max-wait: 1h
+    channels:
+      EMAIL:
+        capacity: 20
+        refill-period: 3s     # 20 a minute after a burst of 20
+      SMS:
+        capacity: 5
+        refill-period: 12s    # 5 a minute after a burst of 5
   retry:
     # 1 attempt + 5 retries waiting about 2s, 6s, 18s, 54s and 60s: 140s in total.
     attempts: 6

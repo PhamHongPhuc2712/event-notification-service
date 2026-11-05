@@ -11,6 +11,16 @@ notifications:
   sms:
     connect-timeout: 1s
     read-timeout: 1s
+  # Generous limits, so tests that send many notifications to one user are not deferred.
+  # RedisTokenBucketRateLimiterTest builds its own tight limits.
+  rate-limit:
+    channels:
+      EMAIL:
+        capacity: 1000
+        refill-period: 1ms
+      SMS:
+        capacity: 1000
+        refill-period: 1ms
   retry:
     attempts: 4
     initial-delay: 200ms

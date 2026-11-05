@@ -32,7 +32,7 @@ class SmsSenderTest {
         provider = new FakeSmsProvider();
         sender = new SmsSender(new WorkerProperties(null, null, null,
                 new WorkerProperties.Sms(provider.baseUrl(), Duration.ofSeconds(1), Duration.ofSeconds(1)),
-                null, null));
+                null, null, null));
     }
 
     @AfterEach

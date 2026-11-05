@@ -4,6 +4,7 @@ import com.eventnotification.worker.config.WorkerProperties;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 
 /** Worker settings for unit tests that build beans by hand. */
 public final class TestWorkerProperties {
@@ -21,6 +22,8 @@ public final class TestWorkerProperties {
                 new WorkerProperties.Sms(URI.create("http://localhost:8082"), Duration.ofSeconds(1),
                         Duration.ofSeconds(1)),
                 new WorkerProperties.Delivery(CLAIM_LEASE),
-                new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3, Duration.ofSeconds(60), Duration.ofSeconds(1)));
+                new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3, Duration.ofSeconds(60), Duration.ofSeconds(1)),
+                new WorkerProperties.RateLimit(true, Duration.ofHours(1),
+                        Map.of("SMS", new WorkerProperties.Bucket(5, Duration.ofSeconds(12)))));
     }
 }

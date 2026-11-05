@@ -2,6 +2,7 @@ package com.eventnotification.chaos;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
@@ -47,6 +48,9 @@ import static org.awaitility.Awaitility.await;
  * Postgres and Kafka in containers. Clients send SMS notifications at a steady rate, retrying
  * with the same Idempotency-Key whenever the API is unreachable. Meanwhile workers are killed
  * with the equivalent of {@code kill -9} and replaced, and the API is killed once too.
+ *
+ * <p>Each of the 50 users receives 20 SMS against a limit of 5 a minute, so most notifications
+ * are deferred to a reserved rate-limit slot and released later by the API.
  */
 @Testcontainers
 class ChaosTest {
@@ -57,13 +61,17 @@ class ChaosTest {
     private static final int WORKERS = 3;
     private static final Duration CHAOS_INTERVAL = Duration.ofSeconds(7);
     private static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(90);
-    private static final Duration DRAIN_TIMEOUT = Duration.ofMinutes(5);
+    // Rate limits spread each user's 20 SMS over about four minutes.
+    private static final Duration DRAIN_TIMEOUT = Duration.ofMinutes(8);
 
     @Container
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16.15-alpine");
 
     @Container
     static final KafkaContainer KAFKA = new KafkaContainer("apache/kafka:4.3.2");
+
+    @Container
+    static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7.4.12-alpine").withExposedPorts(6379);
 
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     private final JsonMapper json = JsonMapper.builder().build();
@@ -137,15 +145,18 @@ class ChaosTest {
         }
         chaosLog.add(elapsed(started) + " all " + NOTIFICATIONS + " notifications accepted by the API");
 
+        long rateLimited = countWhere("rate_limit_reserved");
         await().atMost(DRAIN_TIMEOUT).pollInterval(Duration.ofSeconds(2))
-                .until(() -> countWhere("status = 'QUEUED'") == 0);
-        chaosLog.add(elapsed(started) + " no notification left QUEUED");
+                .until(() -> countWhere("status IN ('QUEUED', 'DEFERRED')") == 0);
+        chaosLog.add(elapsed(started) + " no notification left QUEUED or DEFERRED");
+        rateLimited = Math.max(rateLimited, countWhere("rate_limit_reserved"));
 
         Map<String, Long> statuses = statusCounts();
         Set<UUID> sentIds = sentIds();
         Set<String> providerKeys = providerKeys(mockSms);
         JsonNode providerStats = getJson(mockSms.baseUrl().resolve("/v1/messages/stats"));
-        writeReport(statuses, providerStats, clientRetries.get(), Duration.between(started, Instant.now()));
+        writeReport(statuses, providerStats, clientRetries.get(), rateLimited,
+                Duration.between(started, Instant.now()));
 
         // One notification per Idempotency-Key, despite client retries while the API was down.
         assertThat(new HashSet<>(idsByKey.values())).hasSize(NOTIFICATIONS);
@@ -191,7 +202,8 @@ class ChaosTest {
                 "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
                 "--spring.datasource.username=" + POSTGRES.getUsername(),
                 "--spring.datasource.password=" + POSTGRES.getPassword(),
-                "--spring.kafka.bootstrap-servers=" + KAFKA.getBootstrapServers()));
+                "--spring.kafka.bootstrap-servers=" + KAFKA.getBootstrapServers(),
+                "--notifications.deferred.poll-interval=1s"));
     }
 
     private ServiceProcess startWorker(ServiceProcess mockSms) throws IOException {
@@ -200,6 +212,9 @@ class ChaosTest {
                 "--spring.datasource.username=" + POSTGRES.getUsername(),
                 "--spring.datasource.password=" + POSTGRES.getPassword(),
                 "--spring.kafka.bootstrap-servers=" + KAFKA.getBootstrapServers(),
+                // Real rate limits: each user gets 20 SMS, so most wait for a reserved slot.
+                "--spring.data.redis.host=" + REDIS.getHost(),
+                "--spring.data.redis.port=" + REDIS.getMappedPort(6379),
                 // A dead worker's partitions move after 6s, and its claims expire after 10s.
                 "--spring.kafka.consumer.properties.session.timeout.ms=6000",
                 "--spring.kafka.consumer.properties.heartbeat.interval.ms=2000",
@@ -278,7 +293,8 @@ class ChaosTest {
         return json.readTree(response.body());
     }
 
-    private void writeReport(Map<String, Long> statuses, JsonNode provider, int clientRetries, Duration total)
+    private void writeReport(Map<String, Long> statuses, JsonNode provider, int clientRetries, long rateLimited,
+                             Duration total)
             throws IOException {
         String report = """
                 # Chaos test report
@@ -302,13 +318,14 @@ class ChaosTest {
                 | Provider requests in total | %d |
                 | Repeat requests absorbed by the provider's idempotency key | %d |
                 | Client retries while the API was down | %d |
+                | Deferred to a rate-limit slot at least once | %d |
                 """.formatted(NOTIFICATIONS, CLIENTS, WORKERS, total.toSeconds(),
                 String.join("\n", chaosLog.stream().map(line -> "- " + line).toList()),
                 provider.get("injectedFailures").asLong(), provider.get("injectedTimeouts").asLong(),
                 provider.get("injectedSlowResponses").asLong(),
                 statuses.values().stream().mapToLong(Long::longValue).sum(), statuses,
                 provider.get("accepted").asLong(), provider.get("requests").asLong(),
-                provider.get("duplicateRequests").asLong(), clientRetries);
+                provider.get("duplicateRequests").asLong(), clientRetries, rateLimited);
         Files.writeString(Path.of("target", "chaos-report.md"), report);
         System.out.println(report);
     }

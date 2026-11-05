@@ -61,7 +61,7 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Broker | Kafka | Per-key ordering via partitions, replay, consumer groups | RabbitMQ, SQS |
 | Publishing | Transactional outbox | Avoids the dual-write problem between Postgres and Kafka | Publish directly after commit |
 | Dedupe store | Postgres unique constraint | Durable and transactional with the status update | Redis with TTL |
-| Rate limiting | Redis token bucket in Lua | Atomic across many workers | In-memory per worker |
+| Rate limiting | Redis token bucket in Lua, with reserved slots | Atomic across many workers; a burst drains without retry storms | In-memory per worker; Redis INCR fixed windows |
 | Quiet hours | DEFERRED rows released by a scheduled job | Kafka has no per-message delay of hours | Delay topics per hour; consumer pause |
 | Retries | Retry topics with per-record jitter, then a dead-letter topic | A failing record does not stall its partition | Blocking retries in place |
 | SMS duplicates | Provider idempotency key = notification ID | A timed-out send can be retried safely | Never retry a timeout (loses messages) |
@@ -156,6 +156,25 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   clock. The worker checks the preferences again when the released message arrives, so a
   user who lengthens their quiet hours in the meantime is deferred again. Nothing yet lets an
   urgent notification, such as a password reset, skip quiet hours; that comes with priorities.
+- **Rate limits are a token bucket in one Lua script.** Each user has a bucket per channel in
+  Redis, shared by every worker. Refilling, checking and taking a token happen in one script,
+  which Redis runs atomically, so two workers handling the same user at once cannot both take
+  the last token; a test fires 50 requests at a bucket of 10 and gets exactly 10. The script
+  reads the time from Redis, so workers with skewed clocks share one timeline, and a bucket
+  key expires once it would be full again, so idle users cost no memory.
+- **Over the limit means later, not never.** When the bucket is empty, the script lets the
+  count go negative and returns how long until that caller's token exists: each caller
+  reserves the next free slot. The notification is DEFERRED to exactly that slot and released
+  by the same job as quiet hours, marked so that it does not take a second token. The simpler
+  design, defer and try again, makes a burst of 100 retry together every cycle, and most fail
+  again; reservations drain the burst at the refill rate with one deferral each. A slot more
+  than an hour away is not reserved, and the notification is SUPPRESSED as `RATE_LIMITED`. A
+  send that fails after taking a token keeps it for its retry. Quiet hours are checked first,
+  so a notification held overnight does not use up the morning's tokens. In the chaos run,
+  642 of 1,000 SMS waited for a slot, and all 1,000 were still sent exactly once.
+- **If Redis is down, the limiter lets notifications through.** Failing closed would hold back
+  password resets during a Redis outage; the limit protects users from floods, and a short
+  outage lets at most a short flood through. The Redis client times out after 2s.
 - **Public failure reasons are codes.** The API returns `RECIPIENT_REJECTED`,
   `REJECTED_BY_PROVIDER` or `RETRIES_EXHAUSTED`, never the raw provider error, which can reveal
   internal hostnames and ports. The full error goes to the logs. For SMS, a `400` is a rejected
@@ -178,7 +197,9 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 timeouts and 10% slow responses, the api, and three workers, against Postgres and Kafka in
 containers. Eight clients send 1,000 SMS notifications at about 20 a second, retrying with the
 same `Idempotency-Key` whenever the API is unreachable. Every 7 seconds one or two workers are
-killed with the equivalent of `kill -9` and replaced; once, the API is killed instead.
+killed with the equivalent of `kill -9` and replaced; once, the API is killed instead. Each
+of the 50 users gets 20 SMS against a limit of 5 a minute, so most notifications are also
+deferred to a rate-limit slot and released later.
 
 The test then checks that the API created exactly 1,000 notifications, that all 1,000 are SENT,
 and that the provider accepted exactly one SMS for each of them. First run on a laptop:

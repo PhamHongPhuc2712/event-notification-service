@@ -11,12 +11,14 @@ import org.springframework.validation.annotation.Validated;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 
 @Validated
 @ConfigurationProperties("notifications")
 public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Consumer consumer,
                                @Valid @NotNull Mail mail, @Valid @NotNull Sms sms,
-                               @Valid @NotNull Delivery delivery, @Valid @NotNull Retry retry) {
+                               @Valid @NotNull Delivery delivery, @Valid @NotNull Retry retry,
+                               @Valid @NotNull RateLimit rateLimit) {
 
     public record Topics(@NotBlank String email, @NotBlank String sms, @Min(1) int partitions) {
     }
@@ -44,6 +46,21 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
      *
      * @param attempts total attempts including the first, so {@code attempts - 1} retry topics
      */
+    /**
+     * Per-user rate limits.
+     *
+     * @param maxWait  the furthest ahead a send slot may be reserved; beyond it the notification
+     *                 is SUPPRESSED as RATE_LIMITED
+     * @param channels a bucket per channel name, such as SMS; a channel without one is unlimited
+     */
+    public record RateLimit(boolean enabled, @NotNull Duration maxWait,
+                            @NotNull Map<String, @Valid @NotNull Bucket> channels) {
+    }
+
+    /** Allows bursts of {@code capacity}, then one notification per {@code refillPeriod}. */
+    public record Bucket(@Min(1) int capacity, @NotNull Duration refillPeriod) {
+    }
+
     public record Retry(@Min(2) int attempts, @NotNull Duration initialDelay, @DecimalMin("1.0") double multiplier,
                         @NotNull Duration maxDelay, @NotNull Duration jitter) {
     }

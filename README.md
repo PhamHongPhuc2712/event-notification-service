@@ -101,6 +101,14 @@ curl -X PUT http://localhost:8080/users/user-42/preferences -H "Content-Type: ap
 curl http://localhost:8080/users/user-42/preferences   # every channel, no quiet hours, if never set
 ```
 
+## Rate limits
+
+Each user has a token bucket per channel in Redis: by default a burst of 5 SMS, then 5 a
+minute, and a burst of 20 emails, then 20 a minute. A notification over the limit is not
+dropped: it reserves the next free slot and becomes `DEFERRED` until then. Only one that would
+wait more than an hour is `SUPPRESSED` with `RATE_LIMITED`. Limits are set under
+`notifications.rate-limit` in `worker/src/main/resources/application.yml`.
+
 ## Failures, retries and replay
 
 A send that fails for a reason a retry may fix moves through `<topic>-retry-0` … `-retry-4`
