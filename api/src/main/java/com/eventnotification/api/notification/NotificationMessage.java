@@ -11,10 +11,11 @@ public record NotificationMessage(
         String recipient,
         String subject,
         String body,
+        Priority priority,
         Instant createdAt) {
 
     static NotificationMessage from(Notification n) {
         return new NotificationMessage(n.id(), n.userId(), n.channel(), n.recipient(), n.subject(), n.body(),
-                n.createdAt());
+                n.priority(), n.createdAt());
     }
 }

@@ -61,6 +61,7 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Broker | Kafka | Per-key ordering via partitions, replay, consumer groups | RabbitMQ, SQS |
 | Publishing | Transactional outbox | Avoids the dual-write problem between Postgres and Kafka | Publish directly after commit |
 | Dedupe store | Postgres unique constraint | Durable and transactional with the status update | Redis with TTL |
+| Priority | Separate `.high` topics with their own consumers | A backlog on one topic cannot delay the other | One topic with a priority field (still read in order) |
 | Rate limiting | Redis token bucket in Lua, with reserved slots | Atomic across many workers; a burst drains without retry storms | In-memory per worker; Redis INCR fixed windows |
 | Quiet hours | DEFERRED rows released by a scheduled job | Kafka has no per-message delay of hours | Delay topics per hour; consumer pause |
 | Retries | Retry topics with per-record jitter, then a dead-letter topic | A failing record does not stall its partition | Blocking retries in place |
@@ -154,8 +155,21 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   the outbox, moves due notifications back to QUEUED and adds a new outbox row in one
   transaction. It uses `FOR UPDATE SKIP LOCKED`, like the outbox publisher, and the database
   clock. The worker checks the preferences again when the released message arrives, so a
-  user who lengthens their quiet hours in the meantime is deferred again. Nothing yet lets an
-  urgent notification, such as a password reset, skip quiet hours; that comes with priorities.
+  user who lengthens their quiet hours in the meantime is deferred again. HIGH-priority
+  notifications skip quiet hours.
+- **Priority is a separate topic, not a priority queue.** Kafka has no message priorities, and a
+  partition is read in order, so a password reset behind 50,000 marketing emails waits for all
+  of them. HIGH notifications go to `<topic>.high` instead, read by a separate consumer group
+  with its own threads; a test builds a slow backlog of 60 SMS and checks that a HIGH SMS is
+  sent while most of the backlog still waits. Each priority also has its own retry topics.
+  The cost: notifications of different priorities for one user are no longer in order, which
+  is the point. Lowering the normal topic's consumer count does not slow HIGH, and HIGH could
+  get its own worker deployment later without any code change.
+- **HIGH skips quiet hours, but not a disabled channel.** A password reset requested at 2am is
+  wanted at 2am. A channel the user turned off stays off even for HIGH: the user asked for that
+  explicitly, and the reset can be requested on another channel. HIGH draws from a separate,
+  smaller rate-limit bucket (3 SMS or 5 emails, refilled one a minute), so marketing traffic
+  cannot use up the tokens a reset needs, and requesting resets in a loop cannot spam a user.
 - **Rate limits are a token bucket in one Lua script.** Each user has a bucket per channel in
   Redis, shared by every worker. Refilling, checking and taking a token happen in one script,
   which Redis runs atomically, so two workers handling the same user at once cannot both take

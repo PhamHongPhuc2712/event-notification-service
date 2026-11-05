@@ -29,6 +29,7 @@ public class FakeSmsProvider implements AutoCloseable {
     private final Map<String, Deque<Integer>> scripts = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
     private volatile Integer alwaysRespond;
+    private volatile Duration latency = Duration.ZERO;
 
     public FakeSmsProvider() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -51,6 +52,11 @@ public class FakeSmsProvider implements AutoCloseable {
         alwaysRespond = status;
     }
 
+    /** Adds this delay before every response, like a provider under load. */
+    public void setLatency(Duration latency) {
+        this.latency = latency;
+    }
+
     public int attempts(String key) {
         AtomicInteger count = attempts.get(key);
         return count == null ? 0 : count.get();
@@ -63,8 +69,10 @@ public class FakeSmsProvider implements AutoCloseable {
             attempts.computeIfAbsent(String.valueOf(key), k -> new AtomicInteger()).incrementAndGet();
             int status = nextStatus(key);
             if (status == TIMEOUT) {
-                sleep();
+                sleep(SLOW_RESPONSE);
                 status = 202;
+            } else if (!latency.isZero()) {
+                sleep(latency);
             }
             byte[] body = "{\"status\":\"accepted\"}".getBytes();
             exchange.getResponseHeaders().add("Content-Type", "application/json");
@@ -83,9 +91,9 @@ public class FakeSmsProvider implements AutoCloseable {
         return next == null ? 202 : next;
     }
 
-    private static void sleep() {
+    private static void sleep(Duration duration) {
         try {
-            Thread.sleep(SLOW_RESPONSE);
+            Thread.sleep(duration);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

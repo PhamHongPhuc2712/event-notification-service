@@ -22,7 +22,18 @@ public record CreateNotificationRequest(
         String subject,
         @NotBlank @Size(max = 10_000)
         @Pattern(regexp = "[^\\x00]*", message = "must not contain null characters")
-        String body) {
+        String body,
+        /** NORMAL when omitted. */
+        Priority priority) {
+
+    /** The pre-priority shape, kept for callers that do not set one. */
+    public CreateNotificationRequest(String userId, Channel channel, String recipient, String subject, String body) {
+        this(userId, channel, recipient, subject, body, null);
+    }
+
+    public Priority effectivePriority() {
+        return priority == null ? Priority.NORMAL : priority;
+    }
 
     @AssertTrue(message = "subject is required for EMAIL notifications")
     boolean isSubjectPresentForEmail() {

@@ -19,5 +19,13 @@ public interface RateLimiter {
         public static final Decision NOW = new Decision(Outcome.NOW, Duration.ZERO);
     }
 
-    Decision acquire(String userId, String channel);
+    /**
+     * @param highPriority HIGH notifications draw from a separate, smaller bucket, so that
+     *                     marketing traffic cannot use up the tokens a password reset needs
+     */
+    Decision acquire(String userId, String channel, boolean highPriority);
+
+    default Decision acquire(String userId, String channel) {
+        return acquire(userId, channel, false);
+    }
 }

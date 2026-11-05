@@ -23,8 +23,10 @@ public class NotificationRepository {
     public void insert(Notification n) {
         jdbc.sql("""
                         INSERT INTO notifications
-                            (id, user_id, channel, recipient, subject, body, status, created_at, updated_at)
-                        VALUES (:id, :userId, :channel, :recipient, :subject, :body, :status, :createdAt, :updatedAt)
+                            (id, user_id, channel, recipient, subject, body, priority, status, created_at,
+                             updated_at)
+                        VALUES (:id, :userId, :channel, :recipient, :subject, :body, :priority, :status, :createdAt,
+                                :updatedAt)
                         """)
                 .param("id", n.id())
                 .param("userId", n.userId())
@@ -32,6 +34,7 @@ public class NotificationRepository {
                 .param("recipient", n.recipient())
                 .param("subject", n.subject())
                 .param("body", n.body())
+                .param("priority", n.priority().name())
                 .param("status", n.status().name())
                 .param("createdAt", Timestamp.from(n.createdAt()))
                 .param("updatedAt", Timestamp.from(n.updatedAt()))
@@ -83,6 +86,7 @@ public class NotificationRepository {
                 rs.getString("recipient"),
                 rs.getString("subject"),
                 rs.getString("body"),
+                Priority.valueOf(rs.getString("priority")),
                 NotificationStatus.valueOf(rs.getString("status")),
                 rs.getString("failure_reason"),
                 toInstant(rs.getTimestamp("created_at")),

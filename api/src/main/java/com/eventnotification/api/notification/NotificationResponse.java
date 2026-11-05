@@ -9,6 +9,7 @@ public record NotificationResponse(
         Channel channel,
         String recipient,
         String subject,
+        Priority priority,
         NotificationStatus status,
         String failureReason,
         Instant createdAt,
@@ -17,7 +18,7 @@ public record NotificationResponse(
         Instant deliverAfter) {
 
     static NotificationResponse from(Notification n) {
-        return new NotificationResponse(n.id(), n.userId(), n.channel(), n.recipient(), n.subject(), n.status(),
+        return new NotificationResponse(n.id(), n.userId(), n.channel(), n.recipient(), n.subject(), n.priority(), n.status(),
                 n.failureReason(), n.createdAt(), n.updatedAt(), n.sentAt(), n.deliverAfter());
     }
 }

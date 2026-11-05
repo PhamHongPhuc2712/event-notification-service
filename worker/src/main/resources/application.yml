@@ -55,6 +55,7 @@ notifications:
     email-group: email-worker
     sms-group: sms-worker
     concurrency: 3
+    high-priority-concurrency: 2
   mail:
     from: no-reply@event-notification.local
   sms:
@@ -77,6 +78,15 @@ notifications:
       SMS:
         capacity: 5
         refill-period: 12s    # 5 a minute after a burst of 5
+    # HIGH priority has its own buckets: enough for a few login codes, not enough to spam a
+    # user by requesting password resets in a loop.
+    high-priority-channels:
+      EMAIL:
+        capacity: 5
+        refill-period: 1m
+      SMS:
+        capacity: 3
+        refill-period: 1m
   retry:
     # 1 attempt + 5 retries waiting about 2s, 6s, 18s, 54s and 60s: 140s in total.
     attempts: 6

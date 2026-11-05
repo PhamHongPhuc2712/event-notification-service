@@ -101,6 +101,18 @@ curl -X PUT http://localhost:8080/users/user-42/preferences -H "Content-Type: ap
 curl http://localhost:8080/users/user-42/preferences   # every channel, no quiet hours, if never set
 ```
 
+## Priority
+
+Set `"priority":"HIGH"` for notifications the user is waiting for, such as password resets
+and login codes. They go to their own topics (`notifications.sms.high`, `notifications.email.high`)
+with their own consumers, so they never wait behind a marketing backlog. They also ignore quiet
+hours and have a separate, smaller rate limit, but still respect a channel the user turned off.
+
+```bash
+curl -i -X POST http://localhost:8080/notifications -H "Content-Type: application/json" \
+  -d '{"userId":"user-42","channel":"SMS","recipient":"+6591234567","body":"Reset code 123456","priority":"HIGH"}'
+```
+
 ## Rate limits
 
 Each user has a token bucket per channel in Redis: by default a burst of 5 SMS, then 5 a

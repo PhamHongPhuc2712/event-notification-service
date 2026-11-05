@@ -23,7 +23,13 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
     public record Topics(@NotBlank String email, @NotBlank String sms, @Min(1) int partitions) {
     }
 
-    public record Consumer(@NotBlank String emailGroup, @NotBlank String smsGroup, @Min(1) int concurrency) {
+    /**
+     * @param highPriorityConcurrency consumer threads per HIGH-priority topic. These are separate
+     *                                from the normal topic's threads, so a backlog there cannot
+     *                                hold up a password reset.
+     */
+    public record Consumer(@NotBlank String emailGroup, @NotBlank String smsGroup, @Min(1) int concurrency,
+                           @Min(1) int highPriorityConcurrency) {
     }
 
     public record Mail(@NotBlank @Email String from) {
@@ -51,10 +57,12 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
      *
      * @param maxWait  the furthest ahead a send slot may be reserved; beyond it the notification
      *                 is SUPPRESSED as RATE_LIMITED
-     * @param channels a bucket per channel name, such as SMS; a channel without one is unlimited
+     * @param channels             a bucket per channel name, such as SMS; a channel without one is unlimited
+     * @param highPriorityChannels the same for HIGH-priority notifications, which have their own buckets
      */
     public record RateLimit(boolean enabled, @NotNull Duration maxWait,
-                            @NotNull Map<String, @Valid @NotNull Bucket> channels) {
+                            @NotNull Map<String, @Valid @NotNull Bucket> channels,
+                            @NotNull Map<String, @Valid @NotNull Bucket> highPriorityChannels) {
     }
 
     /** Allows bursts of {@code capacity}, then one notification per {@code refillPeriod}. */

@@ -1,5 +1,6 @@
 package com.eventnotification.api.config;
 
+import com.eventnotification.api.notification.Priority;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,6 +25,17 @@ class AppConfig {
     @Bean
     NewTopic smsTopic(NotificationProperties properties) {
         return topic(properties.topics().sms(), properties);
+    }
+
+    /** HIGH-priority topics have their own consumers, so a backlog on the normal topic cannot delay them. */
+    @Bean
+    NewTopic emailHighPriorityTopic(NotificationProperties properties) {
+        return topic(Priority.HIGH.topic(properties.topics().email()), properties);
+    }
+
+    @Bean
+    NewTopic smsHighPriorityTopic(NotificationProperties properties) {
+        return topic(Priority.HIGH.topic(properties.topics().sms()), properties);
     }
 
     private static NewTopic topic(String name, NotificationProperties properties) {

@@ -10,6 +10,7 @@ public record Notification(
         String recipient,
         String subject,
         String body,
+        Priority priority,
         NotificationStatus status,
         String failureReason,
         Instant createdAt,
@@ -20,6 +21,6 @@ public record Notification(
 
     public static Notification queued(CreateNotificationRequest request, Instant now) {
         return new Notification(UUID.randomUUID(), request.userId(), request.channel(), request.recipient(),
-                request.subject(), request.body(), NotificationStatus.QUEUED, null, now, now, null, null);
+                request.subject(), request.body(), request.effectivePriority(), NotificationStatus.QUEUED, null, now, now, null, null);
     }
 }

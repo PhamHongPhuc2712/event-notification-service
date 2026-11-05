@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -46,7 +47,7 @@ class DeliveryServiceTest {
 
     @BeforeEach
     void notRateLimited() {
-        when(rateLimiter.acquire(anyString(), anyString())).thenReturn(RateLimiter.Decision.NOW);
+        when(rateLimiter.acquire(anyString(), anyString(), anyBoolean())).thenReturn(RateLimiter.Decision.NOW);
     }
 
     @Test
@@ -187,7 +188,7 @@ class DeliveryServiceTest {
     @Test
     void defersARateLimitedNotificationToItsReservedSlot() {
         givenQueuedAndClaimable();
-        when(rateLimiter.acquire("user-1", "EMAIL"))
+        when(rateLimiter.acquire("user-1", "EMAIL", false))
                 .thenReturn(new RateLimiter.Decision(RateLimiter.Outcome.LATER, Duration.ofSeconds(12)));
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.DEFERRED);
@@ -200,7 +201,7 @@ class DeliveryServiceTest {
     @Test
     void suppressesANotificationWhoseSlotIsTooFarAway() {
         givenQueuedAndClaimable();
-        when(rateLimiter.acquire("user-1", "EMAIL"))
+        when(rateLimiter.acquire("user-1", "EMAIL", false))
                 .thenReturn(new RateLimiter.Decision(RateLimiter.Outcome.REJECTED, Duration.ofHours(2)));
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SUPPRESSED);
@@ -238,6 +239,30 @@ class DeliveryServiceTest {
         service.deliver(message, sender);
 
         verify(rateLimiter, never()).acquire(anyString(), anyString());
+    }
+
+    @Test
+    void highPriorityIgnoresQuietHoursAndUsesItsOwnBucket() {
+        NotificationMessage reset = new NotificationMessage(message.notificationId(), "user-1", "EMAIL",
+                "bob@example.com", "Reset your password", "Code 123456", NotificationMessage.HIGH, NOW);
+        givenQueuedAndClaimable();
+        givenPreferences(new UserPreferences(Set.of("EMAIL"),
+                Optional.of(new QuietHours(LocalTime.of(11, 0), LocalTime.of(13, 0), ZoneOffset.UTC))));
+
+        assertThat(service.deliver(reset, sender)).isEqualTo(DeliveryOutcome.SENT);
+
+        verify(statuses, never()).markDeferred(any(), any(), any());
+        verify(rateLimiter).acquire("user-1", "EMAIL", true);
+    }
+
+    @Test
+    void highPriorityStillRespectsADisabledChannel() {
+        NotificationMessage reset = new NotificationMessage(message.notificationId(), "user-1", "EMAIL",
+                "bob@example.com", "Reset your password", "Code 123456", NotificationMessage.HIGH, NOW);
+        givenQueuedAndClaimable();
+        givenPreferences(new UserPreferences(Set.of("SMS"), Optional.empty()));
+
+        assertThat(service.deliver(reset, sender)).isEqualTo(DeliveryOutcome.SUPPRESSED);
     }
 
     private void givenPreferences(UserPreferences userPreferences) {

@@ -88,7 +88,8 @@ public class NotificationService {
     /** Adds the outbox row that the outbox publisher sends to the channel's topic. */
     private void publish(Notification notification) {
         String payload = jsonMapper.writeValueAsString(NotificationMessage.from(notification));
-        outbox.insert(notification.id(), topicFor(notification.channel()), notification.userId(), payload,
+        String topic = notification.priority().topic(topicFor(notification.channel()));
+        outbox.insert(notification.id(), topic, notification.userId(), payload,
                 clock.instant());
     }
 
@@ -104,7 +105,7 @@ public class NotificationService {
     /** SHA-256 of the request fields in a fixed order, so equal requests hash equally. */
     private String hash(CreateNotificationRequest request) {
         Object[] fields = {request.userId(), request.channel().name(), request.recipient(), request.subject(),
-                request.body()};
+                request.body(), request.effectivePriority().name()};
         byte[] canonical = jsonMapper.writeValueAsString(fields).getBytes(StandardCharsets.UTF_8);
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical));

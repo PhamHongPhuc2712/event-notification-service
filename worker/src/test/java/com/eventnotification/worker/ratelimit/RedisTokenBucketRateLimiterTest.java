@@ -94,9 +94,20 @@ class RedisTokenBucketRateLimiterTest {
     }
 
     @Test
+    void highPriorityHasItsOwnBucket() {
+        RateLimiter limiter = limiter(1, Duration.ofHours(1), Duration.ZERO);
+        String user = uniqueUser();
+
+        assertThat(limiter.acquire(user, "SMS", false)).isEqualTo(Decision.NOW);
+        assertThat(limiter.acquire(user, "SMS", false).outcome()).isEqualTo(Outcome.REJECTED);
+        // The marketing bucket is empty, but the password reset still goes out.
+        assertThat(limiter.acquire(user, "SMS", true)).isEqualTo(Decision.NOW);
+    }
+
+    @Test
     void channelWithoutABucketIsUnlimited() {
         RateLimiter limiter = new RedisTokenBucketRateLimiter(redis, new WorkerProperties.RateLimit(true,
-                Duration.ZERO, Map.of("SMS", new WorkerProperties.Bucket(1, Duration.ofHours(1)))));
+                Duration.ZERO, Map.of("SMS", new WorkerProperties.Bucket(1, Duration.ofHours(1))), Map.of()));
         String user = uniqueUser();
 
         for (int i = 0; i < 10; i++) {
@@ -154,7 +165,7 @@ class RedisTokenBucketRateLimiterTest {
 
         limiter.acquire(user, "SMS");
 
-        Long ttl = redis.getExpire(RedisTokenBucketRateLimiter.key(user, "SMS"),
+        Long ttl = redis.getExpire(RedisTokenBucketRateLimiter.key(user, "SMS", false),
                 TimeUnit.MILLISECONDS);
         assertThat(ttl).isBetween(1L, 1_500L);
     }
@@ -181,7 +192,8 @@ class RedisTokenBucketRateLimiterTest {
 
     private static WorkerProperties.RateLimit properties(int capacity, Duration refill, Duration maxWait) {
         WorkerProperties.Bucket bucket = new WorkerProperties.Bucket(capacity, refill);
-        return new WorkerProperties.RateLimit(true, maxWait, Map.of("SMS", bucket, "EMAIL", bucket));
+        return new WorkerProperties.RateLimit(true, maxWait, Map.of("SMS", bucket, "EMAIL", bucket),
+                Map.of("SMS", bucket));
     }
 
     private static <T> List<T> runConcurrently(int threads, Callable<T> task) throws Exception {

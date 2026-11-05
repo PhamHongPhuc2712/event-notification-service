@@ -14,7 +14,7 @@ class RateLimitConfig {
     RateLimiter rateLimiter(WorkerProperties properties, ObjectProvider<StringRedisTemplate> redis) {
         WorkerProperties.RateLimit rateLimit = properties.rateLimit();
         if (!rateLimit.enabled()) {
-            return (userId, channel) -> RateLimiter.Decision.NOW;
+            return (userId, channel, highPriority) -> RateLimiter.Decision.NOW;
         }
         return new RedisTokenBucketRateLimiter(redis.getObject(), rateLimit);
     }

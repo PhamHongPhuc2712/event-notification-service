@@ -182,6 +182,51 @@ class NotificationApiIntegrationTest {
     }
 
     @Test
+    void highPriorityGoesToTheChannelsHighPriorityTopic() throws Exception {
+        String userId = uniqueUserId();
+        MvcResult result = mockMvc.perform(post("/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonMapper.writeValueAsString(Map.of(
+                                "userId", userId, "channel", "SMS", "recipient", "+6591234567",
+                                "body", "Your reset code is 123456", "priority", "HIGH"))))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andReturn();
+
+        ConsumerRecord<String, String> record = awaitRecordFor(idOf(result), SMS_TOPIC + ".high");
+
+        assertThat(jsonMapper.readTree(record.value()).get("priority").asString()).isEqualTo("HIGH");
+    }
+
+    @Test
+    void priorityDefaultsToNormal() throws Exception {
+        mockMvc.perform(post("/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(smsRequest(uniqueUserId(), "Weekly digest")))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.priority").value("NORMAL"));
+    }
+
+    @Test
+    void unknownPriorityIsRejected() throws Exception {
+        mockMvc.perform(post("/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userId":"u1","channel":"SMS","recipient":"+6591234567","body":"b","priority":"URGENT"}"""))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void reusingIdempotencyKeyWithADifferentPriorityIsRejected() throws Exception {
+        String userId = uniqueUserId();
+        postWithKey(smsRequest(userId, "Code"), "prio-key").andExpect(status().isAccepted());
+
+        postWithKey(jsonMapper.writeValueAsString(Map.of("userId", userId, "channel", "SMS",
+                "recipient", "+6591234567", "body", "Code", "priority", "HIGH")), "prio-key")
+                .andExpect(status().isUnprocessableContent());
+    }
+
+    @Test
     void channelSpecificErrorsAreReportedOnTheirFields() throws Exception {
         mockMvc.perform(post("/notifications").contentType(MediaType.APPLICATION_JSON)
                         .content(jsonMapper.writeValueAsString(Map.of(

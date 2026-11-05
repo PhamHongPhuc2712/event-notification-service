@@ -30,23 +30,25 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
 
     private final StringRedisTemplate redis;
     private final Map<String, WorkerProperties.Bucket> buckets;
+    private final Map<String, WorkerProperties.Bucket> highPriorityBuckets;
     private final Duration maxWait;
 
     public RedisTokenBucketRateLimiter(StringRedisTemplate redis, WorkerProperties.RateLimit properties) {
         this.redis = redis;
         this.buckets = properties.channels();
+        this.highPriorityBuckets = properties.highPriorityChannels();
         this.maxWait = properties.maxWait();
     }
 
     @Override
-    public Decision acquire(String userId, String channel) {
-        WorkerProperties.Bucket bucket = buckets.get(channel);
+    public Decision acquire(String userId, String channel, boolean highPriority) {
+        WorkerProperties.Bucket bucket = (highPriority ? highPriorityBuckets : buckets).get(channel);
         if (bucket == null) {
             return Decision.NOW;
         }
         List<?> result;
         try {
-            result = redis.execute(SCRIPT, List.of(key(userId, channel)),
+            result = redis.execute(SCRIPT, List.of(key(userId, channel, highPriority)),
                     String.valueOf(bucket.capacity()),
                     String.valueOf(bucket.refillPeriod().toMillis()),
                     String.valueOf(maxWait.toMillis()));
@@ -64,7 +66,7 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
     }
 
     /** The braces are a Redis Cluster hash tag: all of one user's buckets land on the same node. */
-    static String key(String userId, String channel) {
-        return "ratelimit:{" + userId + "}:" + channel;
+    static String key(String userId, String channel, boolean highPriority) {
+        return "ratelimit:{" + userId + "}:" + channel + (highPriority ? ":HIGH" : "");
     }
 }

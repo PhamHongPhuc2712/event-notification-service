@@ -21,6 +21,13 @@ notifications:
       SMS:
         capacity: 1000
         refill-period: 1ms
+    high-priority-channels:
+      EMAIL:
+        capacity: 1000
+        refill-period: 1ms
+      SMS:
+        capacity: 1000
+        refill-period: 1ms
   retry:
     attempts: 4
     initial-delay: 200ms

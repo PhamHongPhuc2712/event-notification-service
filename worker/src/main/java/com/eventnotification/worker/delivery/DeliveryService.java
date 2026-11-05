@@ -78,7 +78,8 @@ public class DeliveryService {
         // After the preferences, so a notification held for quiet hours does not use up a token.
         boolean tookToken = false;
         if (!statuses.hasRateLimitSlot(id)) {
-            RateLimiter.Decision decision = rateLimiter.acquire(message.userId(), message.channel());
+            RateLimiter.Decision decision = rateLimiter.acquire(message.userId(), message.channel(),
+                    message.isHighPriority());
             held = applyRateLimit(message, decision);
             if (held.isPresent()) {
                 return held.get();
@@ -123,7 +124,8 @@ public class DeliveryService {
                     message.userId());
             return Optional.of(DeliveryOutcome.SUPPRESSED);
         }
-        Optional<Instant> quietUntil = preferences.quietUntil(now);
+        // A password reset at 2am is wanted at 2am: HIGH priority ignores quiet hours.
+        Optional<Instant> quietUntil = message.isHighPriority() ? Optional.empty() : preferences.quietUntil(now);
         if (quietUntil.isPresent()) {
             statuses.markDeferred(id, quietUntil.get(), now);
             // Free the claim, so the message released after quiet hours can be claimed at once.
