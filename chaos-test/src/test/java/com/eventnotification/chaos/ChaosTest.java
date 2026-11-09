@@ -64,8 +64,10 @@ class ChaosTest {
     // Rate limits spread each user's 20 SMS over about four minutes.
     private static final Duration DRAIN_TIMEOUT = Duration.ofMinutes(8);
 
+    // The api and three workers hold 30 connections each, more than the default limit of 100.
     @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16.15-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16.15-alpine")
+            .withCommand("postgres", "-c", "max_connections=200");
 
     @Container
     static final KafkaContainer KAFKA = new KafkaContainer("apache/kafka:4.3.2");
@@ -221,6 +223,7 @@ class ChaosTest {
                 // A test-only secret; this run sends no webhooks, but workers need one to start.
                 "--notifications.webhook.signing-secret=whsec_gFEooYrtFboec/3WTK9KEtPSZFiJhs36b+clSo+96IA=",
                 "--notifications.delivery.claim-lease=10s",
+                "--notifications.delivery.record-sent-for=5s",
                 "--notifications.sms.base-url=" + mockSms.baseUrl(),
                 "--notifications.sms.read-timeout=2s",
                 // 10 attempts over about 32s: longer than the claim lease, so a retry can take a
