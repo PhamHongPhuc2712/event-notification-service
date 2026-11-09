@@ -9,8 +9,9 @@
 # Environment:
 #   RATE, DURATION, USERS, SMS_SHARE, HIGH_SHARE  passed to the k6 script (see notifications.js)
 #   RUN_ID       defaults to a timestamp
-#   SMS_FAULTS   1 keeps the mock provider's failures, timeouts and slow responses; the default
-#                turns them off, so the run measures the service rather than the fake provider
+#   SMS_FAULTS   1 keeps the mock provider's failures, timeouts and slow responses; a JSON object
+#                sets them, as PUT /admin/faults takes it; the default turns them off, so the run
+#                measures the service rather than the fake provider
 #   DRAIN_TIMEOUT seconds the verifier waits for the backlog to empty (default 600)
 #   K6_HOOK      a command run in the background while k6 runs, such as loadtest/chaos.sh
 set -euo pipefail
@@ -30,10 +31,12 @@ done
 # Start from an empty provider and inbox, so the counts belong to this run only.
 curl -sf -X DELETE "$MOCK_SMS/v1/messages" > /dev/null
 curl -sf -X DELETE "$MAILPIT/api/v1/messages" > /dev/null
-if [ "${SMS_FAULTS:-0}" != 1 ]; then
-  curl -sf -X PUT "$MOCK_SMS/admin/faults" -H 'Content-Type: application/json' \
-    -d '{"failureRate":0,"timeoutRate":0,"slowRate":0,"timeoutDelay":"PT10S","slowDelay":"PT1S"}' > /dev/null
-fi
+case "${SMS_FAULTS:-0}" in
+  1) ;;                                   # keep the provider's own fault settings
+  \{*) curl -sf -X PUT "$MOCK_SMS/admin/faults" -H 'Content-Type: application/json' -d "$SMS_FAULTS" > /dev/null ;;
+  *) curl -sf -X PUT "$MOCK_SMS/admin/faults" -H 'Content-Type: application/json' \
+       -d '{"failureRate":0,"timeoutRate":0,"slowRate":0,"timeoutDelay":"PT10S","slowDelay":"PT1S"}' > /dev/null ;;
+esac
 
 echo "Run $RUN_ID: ${RATE:-500}/s for ${DURATION:-60s}"
 hook_pid=""

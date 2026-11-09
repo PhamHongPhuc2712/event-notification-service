@@ -54,18 +54,15 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
     }
 
     /**
-     * @param claimLease how long a worker's claim on a notification lasts. Must be longer than
-     *                   the slowest possible send, or a slow send can be claimed and sent again.
+     * @param claimLease    how long a worker's claim on a notification lasts. Must be longer than
+     *                      the slowest possible send, or a slow send can be claimed and sent again.
+     * @param recordSentFor how long to keep retrying to mark a notification SENT after the send
+     *                      succeeded, for example while the database is briefly unreachable.
+     *                      Shorter than the claim lease, so no other worker takes it meanwhile.
      */
-    public record Delivery(@NotNull Duration claimLease) {
+    public record Delivery(@NotNull Duration claimLease, @NotNull Duration recordSentFor) {
     }
 
-    /**
-     * Non-blocking retries through retry topics. Retry {@code i} (from 0) waits
-     * {@code min(initialDelay * multiplier^i, maxDelay)}, plus or minus a random {@code jitter}.
-     *
-     * @param attempts total attempts including the first, so {@code attempts - 1} retry topics
-     */
     /**
      * Per-user rate limits.
      *
@@ -83,7 +80,15 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
     public record Bucket(@Min(1) int capacity, @NotNull Duration refillPeriod) {
     }
 
+    /**
+     * Non-blocking retries through retry topics. Retry {@code i} (from 0) waits
+     * {@code min(initialDelay * multiplier^i, maxDelay)}, plus or minus a random {@code jitter}.
+     *
+     * @param attempts    total attempts including the first, so {@code attempts - 1} retry topics
+     * @param concurrency consumer threads for each retry and dead-letter topic. They carry a small
+     *                    share of the traffic, so they need far fewer than the main topics.
+     */
     public record Retry(@Min(2) int attempts, @NotNull Duration initialDelay, @DecimalMin("1.0") double multiplier,
-                        @NotNull Duration maxDelay, @NotNull Duration jitter) {
+                        @NotNull Duration maxDelay, @NotNull Duration jitter, @Min(1) int concurrency) {
     }
 }

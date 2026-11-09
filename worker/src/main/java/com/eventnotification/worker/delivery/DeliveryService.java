@@ -7,6 +7,7 @@ import com.eventnotification.worker.ratelimit.RateLimiter;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -34,6 +35,7 @@ public class DeliveryService {
     private final RateLimiter rateLimiter;
     private final DeliveryMetrics metrics;
     private final Duration claimLease;
+    private final Duration recordSentFor;
     private final Clock clock;
     private final String workerId = UUID.randomUUID().toString();
 
@@ -46,6 +48,7 @@ public class DeliveryService {
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
         this.claimLease = properties.delivery().claimLease();
+        this.recordSentFor = properties.delivery().recordSentFor();
         this.clock = clock;
     }
 
@@ -127,7 +130,7 @@ public class DeliveryService {
         metrics.stopSend(sending, message, DeliveryMetrics.SUCCESS);
 
         Instant sentAt = clock.instant();
-        statuses.markSent(id, sentAt);
+        recordSent(id, sentAt);
         metrics.sent(message, sentAt);
         log.info("Sent {} notification {} to user {}", message.channel(), id, message.userId());
         return DeliveryOutcome.SENT;
@@ -188,6 +191,47 @@ public class DeliveryService {
                 yield Optional.of(DeliveryOutcome.SUPPRESSED);
             }
         };
+    }
+
+    /**
+     * Marks the notification SENT, retrying with backoff for up to {@code recordSentFor}. The send
+     * has already succeeded, so the one thing to avoid now is a redelivery that sends it again:
+     * the chaos run found emails sent twice when the database became unreachable for a moment
+     * right after the send. The claim is still ours while this retries, since it is shorter than
+     * the lease. If the database stays away longer, the exception goes to the retry topics, and
+     * the notification may be sent again; that is the documented resend window.
+     */
+    private void recordSent(UUID id, Instant sentAt) {
+        long deadline = System.nanoTime() + recordSentFor.toNanos();
+        long backoffMillis = 50;
+        while (true) {
+            try {
+                statuses.markSent(id, sentAt);
+                return;
+            } catch (DataAccessException e) {
+                if (System.nanoTime() + backoffMillis * 1_000_000 > deadline) {
+                    log.error("Notification {} was sent, but could not be marked SENT for {}; it may be sent again",
+                            id, recordSentFor, e);
+                    throw e;
+                }
+                log.warn("Notification {} was sent, but marking it SENT failed ({}); retrying in {} ms", id,
+                        e.getMessage(), backoffMillis);
+                if (!pause(backoffMillis)) {
+                    throw e;
+                }
+                backoffMillis = Math.min(backoffMillis * 2, 2_000);
+            }
+        }
+    }
+
+    private static boolean pause(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** A retry of a send that already took a token must not take another one. */

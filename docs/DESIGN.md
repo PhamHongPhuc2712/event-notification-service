@@ -126,6 +126,11 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   checked even when the claim was won, in case the previous owner finished just before its lease
   expired. A transient send failure
   releases the claim so the retry need not wait for the lease.
+- **Retry topics get fewer consumers than the main topics.** Each retry and dead-letter topic
+  has 2 consumer threads per worker instead of the main topics' 6. With 6 everywhere, one worker
+  opened about 170 Kafka consumers, most of them polling empty topics: that cost broker CPU at
+  any load, and the reconnect storm after a Kafka restart was enough to kill the network proxy
+  in the first chaos run.
 - **Retries go to retry topics, not back to the front of the partition.** A transient failure
   publishes the record to `<topic>-retry-0`, then `-retry-1` and so on, five retries in all, and
   finally to `<topic>-dlt`. Retrying in place would keep per-user order, but one slow record would
@@ -233,6 +238,11 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   before marking it SENT, the retry sends the email again once the claim's lease expires. The
   claim cannot close this window, because SMTP has no idempotency key: the worker cannot ask the
   server whether a message already went out. For SMS the provider's key closes it.
+- **A send that succeeded is recorded before anything else.** If marking SENT fails after a
+  successful send, the worker keeps retrying it with backoff for up to 30 seconds, half the claim
+  lease, so no other worker takes the notification meanwhile. Giving up at once had turned a
+  database blip into a duplicate email: the chaos run caught three. Only a database outage longer
+  than that, or a crash, still reaches the resend window above.
 - **When Postgres is down, records drain to the dead-letter topic.** Retry topics cannot tell a
   database outage from a provider outage, so after about 140s every record lands in the
   dead-letter topic, where marking it FAILED fails too, so the dead-letter handler keeps

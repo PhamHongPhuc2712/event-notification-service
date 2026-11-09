@@ -9,9 +9,10 @@ spring:
     username: ${POSTGRES_USER:notifications}
     password: ${POSTGRES_PASSWORD}
     hikari:
-      # Enough for every consumer thread (6 per topic, plus HIGH-priority and retry topics) to
-      # hold a connection at once; the default of 10 made threads queue for one.
-      maximum-pool-size: 40
+      # Enough for the busy consumer threads (6 per main topic, plus HIGH-priority and retry
+      # topics); the default of 10 made threads queue for one. Every worker holds this many, so
+      # it counts against Postgres max_connections (200 in infra/docker-compose.yml).
+      maximum-pool-size: 30
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -81,6 +82,9 @@ notifications:
     # Longer than any one send (SMTP worst case 25s, SMS 7s), and shorter than the total
     # retry schedule, so a later retry can take over a dead worker's claim.
     claim-lease: ${CLAIM_LEASE:60s}
+    # After a successful send, keep retrying to mark it SENT for this long instead of giving up
+    # and letting the message be sent again. Under the claim lease, so the claim still holds.
+    record-sent-for: 30s
   rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:true}
     # A user over their limit waits for the next free slot, up to this long; beyond it the
@@ -109,6 +113,9 @@ notifications:
     multiplier: 3
     max-delay: 60s
     jitter: 1s
+    # Threads per retry and dead-letter topic. With the main topics' 6, each worker opened about
+    # 170 Kafka consumers, most of them polling empty topics.
+    concurrency: 2
 
 logging:
   structured:
