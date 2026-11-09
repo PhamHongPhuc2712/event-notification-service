@@ -143,7 +143,7 @@ The run above is the third. The first two failed, and each failure was a real fi
    script overwrote a restarted service's log; it now appends), but the database shows the
    most likely cause: the emails had just been sent when the connection to Postgres died, the
    worker gave up on marking them SENT at once, and the redelivered messages sent them again. The worker now keeps retrying to mark a sent notification SENT for
-   up to 30 seconds (half the claim lease), so a short database outage no longer causes a
+   up to 20 seconds (inside the claim lease), so a short database outage no longer causes a
    duplicate. The same run showed that each worker opened about 170 Kafka consumers, because
    every retry and dead-letter topic used the main topics' 6 threads; they now use 2.
 2. **Two workers ran Postgres out of connections.** The API's 30 connections and two workers' 40

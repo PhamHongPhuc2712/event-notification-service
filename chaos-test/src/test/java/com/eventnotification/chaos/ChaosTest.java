@@ -223,7 +223,7 @@ class ChaosTest {
                 // A test-only secret; this run sends no webhooks, but workers need one to start.
                 "--notifications.webhook.signing-secret=whsec_gFEooYrtFboec/3WTK9KEtPSZFiJhs36b+clSo+96IA=",
                 "--notifications.delivery.claim-lease=10s",
-                "--notifications.delivery.record-sent-for=5s",
+                "--notifications.delivery.record-sent-for=2s",
                 "--notifications.sms.base-url=" + mockSms.baseUrl(),
                 "--notifications.sms.read-timeout=2s",
                 // 10 attempts over about 32s: longer than the claim lease, so a retry can take a

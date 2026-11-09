@@ -86,6 +86,10 @@ public class DeliveryService {
         // before its lease expired.
         if (!"QUEUED".equals(claim.get().status())) {
             log.info("Skipping notification {} already in status {}", id, claim.get().status());
+            if (claim.get().claimed()) {
+                // Otherwise a DEFERRED notification, once released, would wait out this claim.
+                release(id);
+            }
             return DeliveryOutcome.SKIPPED_ALREADY_PROCESSED;
         }
         if (!claim.get().claimed()) {
@@ -197,8 +201,9 @@ public class DeliveryService {
      * Marks the notification SENT, retrying with backoff for up to {@code recordSentFor}. The send
      * has already succeeded, so the one thing to avoid now is a redelivery that sends it again:
      * the chaos run found emails sent twice when the database became unreachable for a moment
-     * right after the send. The claim is still ours while this retries, since it is shorter than
-     * the lease. If the database stays away longer, the exception goes to the retry topics, and
+     * right after the send. The claim should still be ours while this retries: the worst case is
+     * the slowest send (25s for SMTP), plus {@code recordSentFor} (20s), plus one last attempt
+     * waiting for a connection (5s), well inside the 60s lease. If the database stays away longer, the exception goes to the retry topics, and
      * the notification may be sent again; that is the documented resend window.
      */
     private void recordSent(UUID id, Instant sentAt) {
