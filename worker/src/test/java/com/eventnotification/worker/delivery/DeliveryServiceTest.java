@@ -8,6 +8,7 @@ import com.eventnotification.worker.ratelimit.RateLimiter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -112,6 +114,34 @@ class DeliveryServiceTest {
         verify(claims).release(eq(message.notificationId()), anyString());
         verify(statuses, never()).markFailed(any(), anyString(), any());
         verify(statuses, never()).markSent(any(), any());
+    }
+
+    @Test
+    void keepsTryingToRecordASuccessfulSendInsteadOfSendingAgain() {
+        // Found in the chaos run: the database became unreachable right after an email was sent.
+        // Giving up at once left it QUEUED, and the redelivered message sent it a second time.
+        givenQueuedAndClaimable();
+        when(statuses.markSent(message.notificationId(), NOW))
+                .thenThrow(new DataAccessResourceFailureException("connection reset"))
+                .thenThrow(new DataAccessResourceFailureException("connection refused"))
+                .thenReturn(true);
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SENT);
+
+        verify(sender, times(1)).send(message);
+        verify(statuses, times(3)).markSent(message.notificationId(), NOW);
+    }
+
+    @Test
+    void givesUpRecordingTheSendOnceTheClaimWouldNoLongerProtectIt() {
+        givenQueuedAndClaimable();
+        when(statuses.markSent(message.notificationId(), NOW))
+                .thenThrow(new DataAccessResourceFailureException("database down"));
+
+        assertThatThrownBy(() -> service.deliver(message, sender))
+                .isInstanceOf(DataAccessResourceFailureException.class);
+
+        verify(sender, times(1)).send(message);
     }
 
     @Test

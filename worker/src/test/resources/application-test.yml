@@ -38,3 +38,4 @@ notifications:
     multiplier: 2
     max-delay: 1s
     jitter: 50ms
+    concurrency: 2

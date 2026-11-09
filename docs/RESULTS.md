@@ -17,7 +17,8 @@ notification against Postgres, the SMS provider and the Mailpit inbox.
 | End-to-end latency at 500 a second offered, p50 / p99 | 16.5 s / 48.9 s | 0.37 s / 8.9 s |
 | Peak consumer lag at 500 a second offered | 5,140 | 1,923 |
 | API response time at 500 a second, p95 | 3.4 s | 0.42 s |
-| Notifications lost or duplicated, across 1,157,379 in 31 verified runs | 0 | **0** |
+| Lost or duplicated in the load tests (31 runs, 1,157,379 notifications) | 0 | **0** |
+| Lost / duplicated with workers, Kafka and the API killed under load (34,402 notifications) | — | **0 / 2 emails** |
 
 The target from the plan was 2,000 a second with a p99 under 200 ms. This laptop does not get
 there, and the reason is measured below: every notification needs synchronous Postgres commits,
@@ -88,6 +89,65 @@ as the load lasts. In every run, every accepted notification was delivered exact
 "Accepted a second" is below the offered rate because k6 skips a request when all its virtual
 users are busy waiting for slow responses; the skipped requests were never sent, so they are not
 counted as accepted.
+
+## Chaos under load
+
+[`loadtest/chaos.sh`](../loadtest/chaos.sh) runs the same load test at 300 a second for 150
+seconds with two workers, everything connected to Kafka, Postgres and Redis through Toxiproxy,
+while it breaks things on a fixed timeline. The SMS provider also fails 5% of requests, so retry
+topics are busy throughout.
+
+| Time | What broke |
+|---|---|
+| t+41s | worker-1 killed with `kill -9`, restarted 6 s later |
+| t+65s | Kafka restarted (`docker restart`, back after 6 s) |
+| t+86s | 200 ms ± 100 ms latency added each way to Kafka and Postgres, for 24 s |
+| t+115s | worker-2 killed with `kill -9`, restarted 5 s later |
+| t+138s | the API killed with `kill -9`, healthy again 20 s later; clients retried with the same `Idempotency-Key` |
+
+| Measure | Value |
+|---|---|
+| Accepted by the API / stored | 34,402 / 34,402 |
+| Final statuses | 34,402 SENT |
+| SMS delivered / expected | 17,189 / 17,189 |
+| Emails delivered / expected | 17,213 / 17,213 |
+| **Lost** | **0** |
+| **Duplicated** | **2 emails** |
+| Client retries while the API was down or slow | 8,107 |
+| Peak consumer lag | 12,689 |
+| End-to-end latency p50 / p99 | 33 s / 98 s |
+
+Nothing was lost. The two duplicates are both the window DESIGN.md describes: worker-2 sent the
+emails at 21:09:38, while Postgres was still slow from the latency just removed, and was killed
+two seconds later, before it marked them SENT. Its claims held for their 60-second lease, after
+which a retry on worker-1 sent them again; Mailpit has both copies, at 21:09:38 and 21:11:20.
+SMTP has no idempotency key, so the second worker cannot know the first one got through. The
+same kill produced no duplicate SMS, because the provider accepts each notification ID once.
+
+Latency is minutes here because of the outages: each `kill -9` leaves a claim that blocks its
+notification for the 60-second lease, and the API was down for 20 seconds. The 10,599 requests
+k6 never started are counted neither as accepted nor as lost: all its virtual users were waiting
+on the dead API.
+
+### What the earlier chaos runs found
+
+The run above is the third. The first two failed, and each failure was a real finding.
+
+1. **The proxy ran out of memory, and three emails were sent twice.** With 200 ms of latency,
+   Toxiproxy buffered so much that it was killed at its 128 MB limit, cutting every connection to
+   Kafka and Postgres. Three emails were sent twice. The logs of that moment were lost (the
+   script overwrote a restarted service's log; it now appends), but the database shows the
+   most likely cause: the emails had just been sent when the connection to Postgres died, the
+   worker gave up on marking them SENT at once, and the redelivered messages sent them again. The worker now keeps retrying to mark a sent notification SENT for
+   up to 30 seconds (half the claim lease), so a short database outage no longer causes a
+   duplicate. The same run showed that each worker opened about 170 Kafka consumers, because
+   every retry and dead-letter topic used the main topics' 6 threads; they now use 2.
+2. **Two workers ran Postgres out of connections.** The API's 30 connections and two workers' 40
+   each exceeded Postgres's default limit of 100, and the verifier itself could not connect.
+   Postgres now allows 200, and each worker holds 30.
+
+The chaos-test module (`./mvnw -Pchaos verify`) covers the other kind of failure: an SMS provider
+that times out after accepting a message, answered by the provider's idempotency key.
 
 ## What it would take to go faster
 

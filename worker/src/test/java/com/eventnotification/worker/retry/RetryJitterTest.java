@@ -26,7 +26,7 @@ class RetryJitterTest {
 
     // 4 attempts: retry-0 waits 2s, retry-1 6s, retry-2 10s (capped), each +/- 1s.
     private final WorkerProperties.Retry retry = new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3,
-            Duration.ofSeconds(10), Duration.ofSeconds(1));
+            Duration.ofSeconds(10), Duration.ofSeconds(1), 1);
     private final RetryJitter jitter = new RetryJitter(retry, Clock.fixed(NOW, ZoneOffset.UTC),
             RandomGenerator.of("L64X128MixRandom"));
 

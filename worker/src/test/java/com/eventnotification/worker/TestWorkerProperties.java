@@ -10,6 +10,10 @@ import java.util.Map;
 public final class TestWorkerProperties {
 
     public static final Duration CLAIM_LEASE = Duration.ofSeconds(60);
+    /** Consumer threads per retry and dead-letter topic, the same as application-test.yml. */
+    public static final int RETRY_CONCURRENCY = 2;
+    /** Short, so the tests that exhaust it stay fast. */
+    public static final Duration RECORD_SENT_FOR = Duration.ofMillis(300);
 
     private TestWorkerProperties() {
     }
@@ -30,8 +34,9 @@ public final class TestWorkerProperties {
                 new WorkerProperties.Sms(URI.create("http://localhost:8082"), Duration.ofSeconds(1),
                         Duration.ofSeconds(1)),
                 webhook(true),
-                new WorkerProperties.Delivery(CLAIM_LEASE),
-                new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3, Duration.ofSeconds(60), Duration.ofSeconds(1)),
+                new WorkerProperties.Delivery(CLAIM_LEASE, RECORD_SENT_FOR),
+                new WorkerProperties.Retry(4, Duration.ofSeconds(2), 3, Duration.ofSeconds(60), Duration.ofSeconds(1),
+                        RETRY_CONCURRENCY),
                 new WorkerProperties.RateLimit(true, Duration.ofHours(1),
                         Map.of("SMS", new WorkerProperties.Bucket(5, Duration.ofSeconds(12))),
                         Map.of("SMS", new WorkerProperties.Bucket(3, Duration.ofMinutes(1)))));

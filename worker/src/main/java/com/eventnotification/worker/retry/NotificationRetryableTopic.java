@@ -28,6 +28,7 @@ import java.lang.annotation.Target;
                 multiplierString = "${notifications.retry.multiplier}",
                 maxDelayString = "${notifications.retry.max-delay}"),
         numPartitions = "${notifications.topics.partitions}",
+        concurrency = "${notifications.retry.concurrency}",
         exclude = MalformedMessageException.class,
         traversingCauses = "true",
         topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE,

@@ -123,11 +123,13 @@ Aim for these, then report what you actually measure.
   The k6 load test itself comes in Week 7.
 
 ## Week 7: load and chaos testing
-- [ ] k6 load test; find the bottleneck, fix it, measure again
-- [ ] During load: kill workers, restart Kafka, slow the network with Toxiproxy
-- [ ] Verifier script compares accepted vs delivered and counts lost or duplicated
-- [ ] Record everything in `docs/RESULTS.md`
+- [x] k6 load test; find the bottleneck, fix it, measure again
+- [x] During load: kill workers, restart Kafka, slow the network with Toxiproxy
+- [x] Verifier script compares accepted vs delivered and counts lost or duplicated
+- [x] Record everything in `docs/RESULTS.md`
 - **Done when:** a results table shows throughput, p99 latency, consumer lag, lost and duplicate counts
+  — done: [RESULTS.md](RESULTS.md). About 430 a second sustained on the laptop, bound by the
+  disk's WAL flush rate; zero lost in every run, two duplicate emails under `kill -9`.
 
 ## Week 8: write-up
 - [ ] README: architecture diagram, one-command quick start, benchmark results
