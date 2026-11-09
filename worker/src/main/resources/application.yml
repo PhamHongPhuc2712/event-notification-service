@@ -13,6 +13,9 @@ spring:
       # topics); the default of 10 made threads queue for one. Every worker holds this many, so
       # it counts against Postgres max_connections (200 in infra/docker-compose.yml).
       maximum-pool-size: 30
+      # Fail fast when Postgres is unreachable: a 30s wait for a connection, the default, could
+      # make recording a sent notification outlast its claim lease.
+      connection-timeout: 5000   # milliseconds
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -83,8 +86,9 @@ notifications:
     # retry schedule, so a later retry can take over a dead worker's claim.
     claim-lease: ${CLAIM_LEASE:60s}
     # After a successful send, keep retrying to mark it SENT for this long instead of giving up
-    # and letting the message be sent again. Under the claim lease, so the claim still holds.
-    record-sent-for: 30s
+    # and letting the message be sent again. The slowest send (25s), this, and one last wait for
+    # a connection (5s) stay inside the claim lease, so the claim still holds.
+    record-sent-for: ${RECORD_SENT_FOR:20s}
   rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:true}
     # A user over their limit waits for the next free slot, up to this long; beyond it the

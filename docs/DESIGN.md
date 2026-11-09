@@ -151,7 +151,10 @@ as the system can make that true:
   is safe because WAL is written in order: the synchronous SENT commit flushes the earlier claim
   with it, so a database crash can lose a claim only if the notification was not marked SENT, and
   then Kafka redelivers the message anyway. Marking SENT stays synchronous, because a lost SENT
-  would leave a delivered notification QUEUED, or send it again.
+  would leave a delivered notification QUEUED, or send it again. One narrow window remains: if
+  Postgres itself crashes after a claim but before the SENT commit, and a copy of the message is
+  redelivered while the first worker is still sending, the copy finds no claim and can send too.
+  It needs a database crash and a redelivery in the same second or two.
 - **A held claim is retried, never skipped.** If another worker holds a live claim, the worker
   throws a retryable error instead of acknowledging the message. Otherwise a worker that crashed
   after claiming would lose the notification: the message would be acknowledged by the new
@@ -274,8 +277,9 @@ as the system can make that true:
   claim cannot close this window, because SMTP has no idempotency key: the worker cannot ask the
   server whether a message already went out. For SMS the provider's key closes it.
 - **A send that succeeded is recorded before anything else.** If marking SENT fails after a
-  successful send, the worker keeps retrying it with backoff for up to 30 seconds, half the claim
-  lease, so no other worker takes the notification meanwhile. Giving up at once had turned a
+  successful send, the worker keeps retrying it with backoff for up to 20 seconds, and waits at
+  most 5 seconds for a database connection each time, so even after the slowest send the claim
+  is still held and no other worker takes the notification meanwhile. Giving up at once had turned a
   database blip into a duplicate email: the chaos run caught three. Only a database outage longer
   than that, or a crash, still reaches the resend window above.
 - **When Postgres is down, records drain to the dead-letter topic.** Retry topics cannot tell a
@@ -347,8 +351,8 @@ the network proxy dying, which cut every connection to Postgres but not to the m
 that case marking SENT fails, the worker gave up at once, and once the claim expired the retry
 found the notification still QUEUED and sent it again.
 
-The fix: after a successful send, the worker now keeps retrying to mark it SENT for up to 30
-seconds, half the claim lease, so nobody else can take the notification meanwhile and a short
+The fix: after a successful send, the worker now keeps retrying to mark it SENT for up to 20
+seconds, inside the claim lease, so nobody else can take the notification meanwhile and a short
 database outage no longer becomes a duplicate.
 
 The third chaos run still had two duplicates, and they took longer to explain, because the

@@ -1,8 +1,9 @@
 # Event-Driven Notification Service
 
 A multi-channel notification service. Other applications ask it to notify a user; it picks
-the channel, respects user preferences and rate limits, and delivers every notification
-exactly once from the user's point of view, even when workers, the broker, or providers fail.
+the channel, respects user preferences and rate limits, and delivers every notification to the
+user once: never lost when workers, the broker or providers fail, and never sent twice except
+in one documented window (an email whose worker dies between sending it and recording it).
 
 It runs on one laptop at **about 430 notifications a second** with zero lost or duplicated
 across 1.16 million load-tested notifications, and **loses nothing** while workers, Kafka and the

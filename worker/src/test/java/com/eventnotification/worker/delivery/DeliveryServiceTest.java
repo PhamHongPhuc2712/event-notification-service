@@ -74,6 +74,17 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void releasesAClaimItWonOnANotificationThatIsNotQueued() {
+        // A stray copy of a DEFERRED notification's message must not leave a claim behind, or the
+        // real message, published when the notification is released, waits out the lease.
+        givenClaim(true, "DEFERRED", false);
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
+
+        verify(claims).release(eq(message.notificationId()), anyString());
+    }
+
+    @Test
     void settlesARedeliveredFinishedNotificationEvenWhenAnotherWorkerHoldsTheClaim() {
         givenClaim(false, "SENT", false);
 
