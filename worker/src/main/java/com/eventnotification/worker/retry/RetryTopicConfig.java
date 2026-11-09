@@ -10,6 +10,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.time.Clock;
 import java.util.function.Consumer;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.random.RandomGenerator;
 
 /** Plugs per-record jitter into the retry topics that {@link NotificationRetryableTopic} sets up. */
@@ -26,8 +27,17 @@ class RetryTopicConfig extends RetryTopicConfigurationSupport {
 
     @Override
     protected Consumer<DeadLetterPublishingRecovererFactory> configureDeadLetterPublishingContainerFactory() {
-        RetryJitter jitter = new RetryJitter(properties.retry(), clock, RandomGenerator.getDefault());
+        RetryJitter jitter = new RetryJitter(properties.retry(), clock, jitterRandom());
         return factory -> factory.setHeadersFunction(jitter);
+    }
+
+    /**
+     * Random numbers for the jitter, from the calling thread's {@link ThreadLocalRandom}, which
+     * is safe to use from every consumer thread. Not {@link RandomGenerator#getDefault()}: its
+     * algorithm lives in the jdk.random module, which the JRE container image does not include.
+     */
+    static RandomGenerator jitterRandom() {
+        return () -> ThreadLocalRandom.current().nextLong();
     }
 
     /** Wakes paused retry-topic partitions when their next record is due. */

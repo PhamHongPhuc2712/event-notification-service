@@ -1,0 +1,10 @@
+**/target/
+.venv/
+.git/
+.idea/
+.vscode/
+loadtest/
+infra/
+docs/
+chaos-test/
+**/*.log
