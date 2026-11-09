@@ -132,10 +132,10 @@ Aim for these, then report what you actually measure.
   disk's WAL flush rate; zero lost in every run, two duplicate emails under `kill -9`.
 
 ## Week 8: write-up
-- [ ] README: architecture diagram, one-command quick start, benchmark results
-- [ ] `DESIGN.md` tradeoffs: why Kafka, why dedupe in Postgres, what "exactly-once" means here
-- [ ] "Hardest bug" section
-- [ ] Final resume bullet using your real numbers
+- [x] README: architecture diagram, one-command quick start, benchmark results
+- [x] `DESIGN.md` tradeoffs: why Kafka, why dedupe in Postgres, what "exactly-once" means here
+- [x] "Hardest bug" section
+- [x] Final resume bullet using your real numbers (below)
 
 ---
 
@@ -155,10 +155,27 @@ Aim for these, then report what you actually measure.
 4. What was your load-test bottleneck, and how did you fix it?
 5. How would you scale this to 100 times the traffic?
 
-## Resume bullet template
+## Resume bullet
+
+With the measured numbers from [RESULTS.md](RESULTS.md):
+
+```
+Built an event-driven notification service in Java, Spring Boot and Kafka (email, SMS,
+webhooks) that sustains ~430 notifications/sec on a single laptop with a 156 ms median
+end-to-end latency, and lost zero of 1.19M load- and chaos-tested notifications while workers,
+Kafka and the API were killed mid-run, using a transactional outbox, idempotent consumers with
+Postgres claims, and retry/dead-letter topics; profiled the bottleneck to WAL fsyncs and cut
+end-to-end p50 at 500/s from 16.5 s to 0.37 s.
+```
+
+The original template, for reference:
 
 ```
 Built an event-driven notification service in Java and Kafka delivering <N> msgs/sec at
 p99 < <X> ms, with zero lost or duplicate deliveries across <M> chaos-tested events using
 a transactional outbox, idempotent consumers, and retry/dead-letter topics.
 ```
+
+The template's "zero duplicate" is not quite true here: the chaos run produced two duplicate
+emails, from a worker killed between the SMTP send and recording it (DESIGN.md, Hardest bug).
+The bullet above claims only what was measured.
