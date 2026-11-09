@@ -68,6 +68,41 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 | Webhook signing | Standard Webhooks (HMAC-SHA256 over id.timestamp.body) | Interoperable, replay-resistant, testable against the spec | Signing the body only; home-made headers |
 | SMS duplicates | Provider idempotency key = notification ID | A timed-out send can be retried safely | Never retry a timeout (loses messages) |
 
+## Why these choices
+
+**Why Kafka.** The service needs three things from its broker: one user's notifications in
+order, many workers sharing the load, and the ability to read messages again. Kafka gives all
+three from one mechanism, the partitioned log: a user ID always maps to the same partition,
+partitions are split across a consumer group, and offsets can be rewound, which is what the
+dead-letter replay tool does. A classic RabbitMQ queue deletes a message once it is acknowledged
+and keeps order only while one consumer reads it; SQS FIFO keeps order per message group but has
+no replay. Kafka's cost is operational weight, here one KRaft broker in Docker, and that
+retries have to be built from extra topics, since a log cannot delay one message.
+
+**Why the dedupe lives in Postgres, not Redis.** The claim decides who may send a notification,
+and that decision has to agree with the notification's status, which lives in Postgres. In the
+same database, one statement can claim the notification and read its status atomically (see
+`DeliveryClaimRepository`), and a crash cannot leave the claim and the status disagreeing. A
+Redis key with a TTL would be faster, but Redis and Postgres can disagree after a failure, a
+Redis failover can lose recent keys, and a TTL dedupe forgets: a message redelivered after the
+TTL would be sent again. The cost was measured: under load the claim's commit was one of the
+three disk flushes per notification that limit throughput, which is why it now commits
+asynchronously.
+
+**What "exactly once" means here.** Not exactly-once execution: Kafka delivers at least once,
+and a worker can crash at any moment. It means the user receives each notification once, as far
+as the system can make that true:
+
+- Never lost: the outbox makes accepting a notification and queueing it one transaction, and an
+  offset is committed only after the record is settled. 1,191,781 load- and chaos-tested
+  notifications, zero lost ([RESULTS.md](RESULTS.md)).
+- Not sent twice by the system: the claim makes redeliveries, rebalances and retries harmless.
+- Not sent twice by a crash, only where the provider can help: a worker killed after the
+  provider accepted a message but before recording it cannot know the send happened, so it
+  sends again. With an idempotency key, as SMS has, the provider absorbs the repeat. SMTP has
+  none, so an email can arrive twice; the chaos run produced two, out of 34,402, both from a
+  worker killed in that window.
+
 ## Tradeoffs and open questions
 
 - **Outbox polling vs. change data capture.** A 200 ms poller is simple and needs no extra
@@ -297,4 +332,35 @@ the provider-side key kept users from receiving them twice.
 
 ## Hardest bug
 
-- _To be written._
+**Emails sent twice although every send is claimed.** The first chaos run ended with zero lost
+notifications, but the verifier counted three emails in Mailpit twice. The claim exists to make
+that impossible, and the SMS sent in the same run had no repeats.
+
+Three facts narrowed it down. The JSON logs, searched by `notificationId`, showed the second
+copy of each email sent normally, by a worker draining the backlog after the run. Postgres showed
+all three QUEUED until that moment, so the first send had never been recorded. And the first
+send had left no log line at all, because "Sent" is logged after marking the notification SENT.
+So the worker had sent the email and then failed to record it. The logs of the first sends were
+gone (the chaos script overwrote a restarted service's log; it appends now), so the cause had
+to come from the code: the only failure that run injected between the send and the record was
+the network proxy dying, which cut every connection to Postgres but not to the mail server. In
+that case marking SENT fails, the worker gave up at once, and once the claim expired the retry
+found the notification still QUEUED and sent it again.
+
+The fix: after a successful send, the worker now keeps retrying to mark it SENT for up to 30
+seconds, half the claim lease, so nobody else can take the notification meanwhile and a short
+database outage no longer becomes a duplicate.
+
+The third chaos run still had two duplicates, and they took longer to explain, because the
+interesting log lines belonged to a process killed with `kill -9`. This time the headers on the
+retry-topic records said why the retries had waited: "claimed by another worker". Mailpit's
+timestamps put the first copies two seconds before worker-2 was killed. So worker-2 sent them
+while Postgres was still slow, died before recording them, and its claims blocked everyone
+until the lease ran out. That is the window no claim can close: SMTP cannot be asked whether a
+message already went out. SMS has no such duplicates because the provider accepts each
+notification ID once, which is the real lesson: exactly-once delivery is decided at the edge,
+by what the receiving side can deduplicate.
+
+A runner-up, found by the one-command quick start: the worker started on a developer's JDK but
+not in the JRE container image. The retry jitter asked for `RandomGenerator.getDefault()`, whose
+algorithm lives in the `jdk.random` module, which the JRE image does not include.
