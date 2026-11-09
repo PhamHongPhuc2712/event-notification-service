@@ -80,6 +80,32 @@ class OutboxPublisherTest {
     }
 
     @Test
+    void keepsPublishingWhileBatchesAreFullSoABacklogDrainsWithoutWaitingForTheNextPoll() {
+        List<OutboxEvent> full = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(OutboxPublisherTest::event)
+                .toList();
+        when(outbox.lockUnpublished(100)).thenReturn(full, full, List.of(event(201)));
+        when(kafka.send(anyString(), anyString(), anyString())).thenReturn(succeeded());
+
+        publisher.poll();
+
+        verify(outbox, org.mockito.Mockito.times(3)).lockUnpublished(100);
+        assertThat(registry.get(OutboxPublisher.PUBLISHED).counter().count()).isEqualTo(201.0);
+    }
+
+    @Test
+    void stopsDrainingAtTheFirstFailedBatch() {
+        List<OutboxEvent> full = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(OutboxPublisherTest::event)
+                .toList();
+        when(outbox.lockUnpublished(100)).thenReturn(full);
+        when(kafka.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.failedFuture(new TimeoutException("broker unavailable")));
+
+        publisher.poll();
+
+        verify(outbox, org.mockito.Mockito.times(1)).lockUnpublished(100);
+    }
+
+    @Test
     void countsBatchesThatFailedToPublish() {
         when(outbox.lockUnpublished(100)).thenReturn(List.of(event(1)));
         when(kafka.send(anyString(), anyString(), anyString()))

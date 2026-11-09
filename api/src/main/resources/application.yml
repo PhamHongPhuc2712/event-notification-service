@@ -8,6 +8,10 @@ spring:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:notifications}
     username: ${POSTGRES_USER:notifications}
     password: ${POSTGRES_PASSWORD}
+    hikari:
+      # With the default of 10, up to 190 requests queued for a connection at 500 a second, and
+      # the API's p95 rose to 3.4s; see docs/RESULTS.md.
+      maximum-pool-size: 30
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:

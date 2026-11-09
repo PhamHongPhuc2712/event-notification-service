@@ -64,17 +64,25 @@ class DeliveryServiceTest {
 
     @Test
     void skipsNotificationThatIsNoLongerQueued() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("SENT"));
+        givenClaim(true, "SENT", false);
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
 
         verify(sender, never()).send(any());
-        verify(claims, never()).tryClaim(any(), anyString(), any());
+    }
+
+    @Test
+    void settlesARedeliveredFinishedNotificationEvenWhenAnotherWorkerHoldsTheClaim() {
+        givenClaim(false, "SENT", false);
+
+        assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
+
+        verify(sender, never()).send(any());
     }
 
     @Test
     void skipsUnknownNotification() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.empty());
+        when(claims.claim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(Optional.empty());
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_UNKNOWN);
 
@@ -118,8 +126,7 @@ class DeliveryServiceTest {
 
     @Test
     void throwsTransientErrorWithoutSendingWhenAnotherWorkerHoldsTheClaim() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("QUEUED"));
-        when(claims.tryClaim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(false);
+        givenClaim(false, "QUEUED", false);
 
         assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(TransientDeliveryException.class);
 
@@ -129,10 +136,8 @@ class DeliveryServiceTest {
 
     @Test
     void skipsWhenPreviousClaimantFinishedJustBeforeClaimWasTakenOver() {
-        when(statuses.findStatus(message.notificationId()))
-                .thenReturn(Optional.of("QUEUED"))
-                .thenReturn(Optional.of("SENT"));
-        when(claims.tryClaim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(true);
+        // The lease had expired, so the claim was taken over, but the old claimant had marked it SENT.
+        givenClaim(true, "SENT", false);
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
 
@@ -178,8 +183,7 @@ class DeliveryServiceTest {
 
     @Test
     void doesNotApplyPreferencesBeforeWinningTheClaim() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("QUEUED"));
-        when(claims.tryClaim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(false);
+        givenClaim(false, "QUEUED", false);
         givenPreferences(new UserPreferences(Set.of(), Optional.empty()));
 
         assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(TransientDeliveryException.class);
@@ -214,8 +218,7 @@ class DeliveryServiceTest {
 
     @Test
     void notificationWithAReservedSlotDoesNotTakeAnotherToken() {
-        givenQueuedAndClaimable();
-        when(statuses.hasRateLimitSlot(message.notificationId())).thenReturn(true);
+        givenClaim(true, "QUEUED", true);
 
         assertThat(service.deliver(message, sender)).isEqualTo(DeliveryOutcome.SENT);
 
@@ -272,7 +275,11 @@ class DeliveryServiceTest {
     }
 
     private void givenQueuedAndClaimable() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("QUEUED"));
-        when(claims.tryClaim(eq(message.notificationId()), anyString(), eq(LEASE))).thenReturn(true);
+        givenClaim(true, "QUEUED", false);
+    }
+
+    private void givenClaim(boolean claimed, String status, boolean rateLimitReserved) {
+        when(claims.claim(eq(message.notificationId()), anyString(), eq(LEASE)))
+                .thenReturn(Optional.of(new DeliveryClaimRepository.Claim(claimed, status, rateLimitReserved)));
     }
 }

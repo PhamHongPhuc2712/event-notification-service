@@ -36,38 +36,76 @@ class DeliveryClaimRepositoryTest {
     private JdbcClient jdbc;
 
     @Test
+    void theClaimsAsynchronousCommitDoesNotLeakToOtherStatementsOnThePooledConnection() {
+        // Only the claim may skip waiting for the WAL flush; marking SENT must stay durable.
+        for (int i = 0; i < 20; i++) {
+            claimed(insertNotification(), "worker-a");
+            assertThat(jdbc.sql("SHOW synchronous_commit").query(String.class).single()).isEqualTo("on");
+        }
+    }
+
+    @Test
+    void returnsTheNotificationsStateWithTheClaim() {
+        UUID id = insertNotification();
+        jdbc.sql("UPDATE notifications SET rate_limit_reserved = TRUE WHERE id = :id").param("id", id).update();
+
+        DeliveryClaimRepository.Claim claim = claims.claim(id, "worker-a", LEASE).orElseThrow();
+
+        assertThat(claim).isEqualTo(new DeliveryClaimRepository.Claim(true, "QUEUED", true));
+    }
+
+    @Test
+    void reportsTheStatusEvenWhenTheClaimIsLost() {
+        UUID id = insertNotification();
+        claims.claim(id, "worker-a", LEASE);
+        jdbc.sql("UPDATE notifications SET status = 'SENT' WHERE id = :id").param("id", id).update();
+
+        assertThat(claims.claim(id, "worker-b", LEASE).orElseThrow())
+                .isEqualTo(new DeliveryClaimRepository.Claim(false, "SENT", false));
+    }
+
+    @Test
+    void claimsNothingForAnUnknownNotification() {
+        UUID id = UUID.randomUUID();
+
+        assertThat(claims.claim(id, "worker-a", LEASE)).isEmpty();
+        assertThat(jdbc.sql("SELECT count(*) FROM delivery_claims WHERE notification_id = :id")
+                .param("id", id).query(Long.class).single()).isZero();
+    }
+
+    @Test
     void secondWorkerCannotClaimWhileLeaseIsLive() {
         UUID id = insertNotification();
 
-        assertThat(claims.tryClaim(id, "worker-a", LEASE)).isTrue();
-        assertThat(claims.tryClaim(id, "worker-b", LEASE)).isFalse();
+        assertThat(claimed(id, "worker-a")).isTrue();
+        assertThat(claimed(id, "worker-b")).isFalse();
         assertThat(claimant(id)).isEqualTo("worker-a");
     }
 
     @Test
     void expiredClaimCanBeTakenOver() {
         UUID id = insertNotification();
-        claims.tryClaim(id, "worker-a", LEASE);
+        claimed(id, "worker-a");
         backdateClaim(id, Duration.ofMinutes(5));
 
-        assertThat(claims.tryClaim(id, "worker-b", LEASE)).isTrue();
+        assertThat(claimed(id, "worker-b")).isTrue();
         assertThat(claimant(id)).isEqualTo("worker-b");
     }
 
     @Test
     void releasedClaimCanBeClaimedAgain() {
         UUID id = insertNotification();
-        claims.tryClaim(id, "worker-a", LEASE);
+        claimed(id, "worker-a");
 
         claims.release(id, "worker-a");
 
-        assertThat(claims.tryClaim(id, "worker-b", LEASE)).isTrue();
+        assertThat(claimed(id, "worker-b")).isTrue();
     }
 
     @Test
     void workerCannotReleaseAnotherWorkersClaim() {
         UUID id = insertNotification();
-        claims.tryClaim(id, "worker-a", LEASE);
+        claimed(id, "worker-a");
 
         claims.release(id, "worker-b");
 
@@ -86,7 +124,7 @@ class DeliveryClaimRepositoryTest {
                 String workerId = "worker-" + i;
                 results.add(pool.submit(() -> {
                     start.await();
-                    return claims.tryClaim(id, workerId, LEASE);
+                    return claimed(id, workerId);
                 }));
             }
             start.countDown();
@@ -97,6 +135,10 @@ class DeliveryClaimRepositoryTest {
             }
             assertThat(wins).isEqualTo(1);
         }
+    }
+
+    private boolean claimed(UUID id, String workerId) {
+        return claims.claim(id, workerId, LEASE).orElseThrow().claimed();
     }
 
     private UUID insertNotification() {

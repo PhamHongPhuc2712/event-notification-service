@@ -73,6 +73,9 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
 - **Outbox polling vs. change data capture.** A 200 ms poller is simple and needs no extra
   infrastructure, but adds up to one poll interval of latency and a small constant query load.
   Debezium would stream changes from the Postgres log instead, at the cost of running Kafka Connect.
+  The poller publishes batches back to back while they come back full; publishing one batch per
+  poll capped it at 500 rows a second, and the load test showed the backlog growing to 5,800
+  rows and 17 seconds of delay.
 - **Ordering with more than one publisher.** `FOR UPDATE SKIP LOCKED` lets several API instances
   publish in parallel, but then two rows for the same user can be sent out of order. With a single
   publisher, order is preserved. Options if this matters: one publisher elected via an advisory
@@ -104,14 +107,24 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   `delivery_claims`, keyed by notification ID, with `INSERT ... ON CONFLICT DO UPDATE ... WHERE`
   the existing claim is older than a 60-second lease. Postgres serializes the inserts on the
   primary key, so exactly one worker wins; a test races 16 threads to check this. The lease uses
-  the database clock, so clock skew between workers does not matter.
+  the database clock, so clock skew between workers does not matter. The same statement returns
+  the notification's status and rate-limit reservation, so a delivery costs one round trip to
+  Postgres before the send instead of four.
+- **The claim commits asynchronously; marking SENT does not.** Every synchronous commit waits
+  for a WAL flush, and on the test laptop the disk manages about 400 flushes a second, which made
+  it the limit of the whole system (see [RESULTS.md](RESULTS.md)). The claim skips that wait. It
+  is safe because WAL is written in order: the synchronous SENT commit flushes the earlier claim
+  with it, so a database crash can lose a claim only if the notification was not marked SENT, and
+  then Kafka redelivers the message anyway. Marking SENT stays synchronous, because a lost SENT
+  would leave a delivered notification QUEUED, or send it again.
 - **A held claim is retried, never skipped.** If another worker holds a live claim, the worker
   throws a retryable error instead of acknowledging the message. Otherwise a worker that crashed
   after claiming would lose the notification: the message would be acknowledged by the new
   owner and never seen again. The lease (60s) is shorter than the retry schedule (about 140s),
   so a later retry takes over a dead worker's claim. Send timeouts (SMTP 25s worst case, SMS 7s)
-  stay under the lease so a slow send is not claimed twice. After winning the claim the worker checks the status again,
-  in case the previous owner finished just before its lease expired. A transient send failure
+  stay under the lease so a slow send is not claimed twice. The status read with the claim is
+  checked even when the claim was won, in case the previous owner finished just before its lease
+  expired. A transient send failure
   releases the claim so the retry need not wait for the lease.
 - **Retries go to retry topics, not back to the front of the partition.** A transient failure
   publishes the record to `<topic>-retry-0`, then `-retry-1` and so on, five retries in all, and
