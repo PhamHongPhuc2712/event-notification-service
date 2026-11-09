@@ -75,7 +75,12 @@ services:
     ports:
       - "1025:1025"   # SMTP
       - "8025:8025"   # web inbox: http://localhost:8025
-    mem_limit: 128m
+    environment:
+      # Keep every message (the default prunes to 500), so the load-test verifier sees each copy.
+      MP_MAX_MESSAGES: 0
+      # Accept SMTP as fast as the workers send it.
+      MP_SMTP_DISABLE_RDNS: "true"
+    mem_limit: 512m
 
   prometheus:
     image: prom/prometheus:v3.9.1

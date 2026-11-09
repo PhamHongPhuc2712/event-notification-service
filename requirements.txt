@@ -1,2 +1,5 @@
 # Python helper scripts (load-test verifier, data tools).
 # The Java services do not use this file.
+
+# loadtest/verify.py reads the run's rows from Postgres.
+psycopg[binary]==3.2.10
