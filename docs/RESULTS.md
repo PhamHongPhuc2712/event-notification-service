@@ -19,6 +19,10 @@ notification against Postgres, the SMS provider and the Mailpit inbox.
 | API response time at 500 a second, p95 | 3.4 s | 0.42 s |
 | Lost or duplicated in the load tests (31 runs, 1,157,379 notifications) | 0 | **0** |
 | Lost / duplicated with workers, Kafka and the API killed under load (34,402 notifications) | — | **0 / 2 emails** |
+| Test coverage, lines (branches): api / worker / mock-sms | — | 97% (84%) / 93% (77%) / 91% (85%) |
+
+Coverage comes from `./mvnw verify` (224 unit and integration tests); the build fails if any
+module's line coverage drops below 80%, the plan's target.
 
 The target from the plan was 2,000 a second with a p99 under 200 ms. This laptop does not get
 there, and the reason is measured below: every notification needs synchronous Postgres commits,

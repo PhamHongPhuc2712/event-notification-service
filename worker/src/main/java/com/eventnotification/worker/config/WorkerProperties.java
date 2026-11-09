@@ -1,6 +1,7 @@
 package com.eventnotification.worker.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Min;
@@ -61,6 +62,11 @@ public record WorkerProperties(@Valid @NotNull Topics topics, @Valid @NotNull Co
      *                      Shorter than the claim lease, so no other worker takes it meanwhile.
      */
     public record Delivery(@NotNull Duration claimLease, @NotNull Duration recordSentFor) {
+
+        @AssertTrue(message = "record-sent-for must be shorter than claim-lease")
+        public boolean isRecordSentForWithinTheLease() {
+            return claimLease == null || recordSentFor == null || recordSentFor.compareTo(claimLease) < 0;
+        }
     }
 
     /**

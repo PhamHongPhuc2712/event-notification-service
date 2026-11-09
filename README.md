@@ -252,9 +252,12 @@ For readable text in a terminal, set `LOG_FORMAT` to an empty value:
 ## Tests
 
 ```bash
-./mvnw verify            # unit and integration tests (Testcontainers; needs Docker)
+./mvnw verify            # unit and integration tests (Testcontainers; needs Docker), with coverage
 ./mvnw -Pchaos verify    # also the chaos test: about 3 minutes, report in chaos-test/target/chaos-report.md
 ```
+
+Coverage reports are in `<module>/target/site/jacoco/index.html`; the build fails below 80% line
+coverage in any module.
 
 End-to-end smoke test, with infrastructure, `api` and `worker` running:
 
