@@ -5,6 +5,7 @@ import com.eventnotification.worker.preference.QuietHours;
 import com.eventnotification.worker.preference.UserPreferences;
 import com.eventnotification.worker.preference.UserPreferencesRepository;
 import com.eventnotification.worker.ratelimit.RateLimiter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +41,8 @@ class DeliveryServiceTest {
     private final UserPreferencesRepository preferences = mock(UserPreferencesRepository.class);
     private final RateLimiter rateLimiter = mock(RateLimiter.class);
     private final DeliveryService service = new DeliveryService(statuses, claims, preferences, rateLimiter,
-            TestWorkerProperties.create(), Clock.fixed(NOW, ZoneOffset.UTC));
+            new DeliveryMetrics(new SimpleMeterRegistry()), TestWorkerProperties.create(),
+            Clock.fixed(NOW, ZoneOffset.UTC));
 
     private final NotificationMessage message = new NotificationMessage(UUID.randomUUID(), "user-1", "EMAIL",
             "bob@example.com", "Hello", "Body text", NOW);

@@ -104,6 +104,14 @@ notifications:
     max-delay: 60s
     jitter: 1s
 
+logging:
+  structured:
+    format:
+      # One JSON object per line (Elastic Common Schema), ready for a log store. Every entry in
+      # the log context becomes a field, such as notificationId. Set LOG_FORMAT to an empty
+      # value for readable text in a terminal: LOG_FORMAT= ./mvnw -pl <module> spring-boot:run
+      console: ${LOG_FORMAT:ecs}
+
 management:
   endpoints:
     web:

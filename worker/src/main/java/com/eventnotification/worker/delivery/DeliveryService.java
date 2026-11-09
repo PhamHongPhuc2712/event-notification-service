@@ -4,6 +4,7 @@ import com.eventnotification.worker.config.WorkerProperties;
 import com.eventnotification.worker.preference.UserPreferences;
 import com.eventnotification.worker.preference.UserPreferencesRepository;
 import com.eventnotification.worker.ratelimit.RateLimiter;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,17 +32,19 @@ public class DeliveryService {
     private final DeliveryClaimRepository claims;
     private final UserPreferencesRepository preferences;
     private final RateLimiter rateLimiter;
+    private final DeliveryMetrics metrics;
     private final Duration claimLease;
     private final Clock clock;
     private final String workerId = UUID.randomUUID().toString();
 
     public DeliveryService(NotificationStatusRepository statuses, DeliveryClaimRepository claims,
-                           UserPreferencesRepository preferences, RateLimiter rateLimiter,
+                           UserPreferencesRepository preferences, RateLimiter rateLimiter, DeliveryMetrics metrics,
                            WorkerProperties properties, Clock clock) {
         this.statuses = statuses;
         this.claims = claims;
         this.preferences = preferences;
         this.rateLimiter = rateLimiter;
+        this.metrics = metrics;
         this.claimLease = properties.delivery().claimLease();
         this.clock = clock;
     }
@@ -53,6 +56,21 @@ public class DeliveryService {
      *                                    worker holds a live claim; the caller retries
      */
     public DeliveryOutcome deliver(NotificationMessage message, ChannelSender sender) {
+        DeliveryOutcome outcome;
+        try {
+            outcome = attempt(message, sender);
+        } catch (TransientDeliveryException e) {
+            metrics.outcome(message, DeliveryMetrics.RETRY);
+            throw e;
+        } catch (RuntimeException e) {
+            metrics.outcome(message, DeliveryMetrics.ERROR);
+            throw e;
+        }
+        metrics.outcome(message, outcome);
+        return outcome;
+    }
+
+    private DeliveryOutcome attempt(NotificationMessage message, ChannelSender sender) {
         UUID id = message.notificationId();
         // Cheap check first, so redelivered messages for finished notifications skip the claim.
         Optional<DeliveryOutcome> skip = skipReason(id);
@@ -87,21 +105,28 @@ public class DeliveryService {
             tookToken = true;
         }
 
+        Timer.Sample sending = metrics.startSend();
         try {
             sender.send(message);
         } catch (PermanentDeliveryException e) {
+            metrics.stopSend(sending, message, DeliveryMetrics.PERMANENT_FAILURE);
             log.warn("Notification {} failed permanently ({}): {}", id, e.failureCode(), e.getMessage());
             statuses.markFailed(id, e.failureCode(), clock.instant());
             return DeliveryOutcome.FAILED;
         } catch (RuntimeException e) {
+            metrics.stopSend(sending, message, e instanceof TransientDeliveryException
+                    ? DeliveryMetrics.TRANSIENT_FAILURE : DeliveryMetrics.ERROR);
             if (tookToken) {
                 keepRateLimitSlot(id);
             }
             release(id);
             throw e;
         }
+        metrics.stopSend(sending, message, DeliveryMetrics.SUCCESS);
 
-        statuses.markSent(id, clock.instant());
+        Instant sentAt = clock.instant();
+        statuses.markSent(id, sentAt);
+        metrics.sent(message, sentAt);
         log.info("Sent {} notification {} to user {}", message.channel(), id, message.userId());
         return DeliveryOutcome.SENT;
     }

@@ -5,8 +5,14 @@ import com.eventnotification.api.idempotency.IdempotencyKey;
 import com.eventnotification.api.idempotency.IdempotencyKeyRepository;
 import com.eventnotification.api.idempotency.IdempotencyKeyReusedException;
 import com.eventnotification.api.outbox.OutboxRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
@@ -19,21 +25,32 @@ import java.util.UUID;
 @Service
 public class NotificationService {
 
+    /** {@code notification_requests_total{channel, priority, result}}, where result is created or replayed. */
+    public static final String REQUESTS = "notification.requests";
+    /** The log context key that ties log lines to a notification. The worker uses the same one. */
+    static final String NOTIFICATION_ID = "notificationId";
+
+    private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
+
     private final NotificationRepository notifications;
     private final OutboxRepository outbox;
     private final IdempotencyKeyRepository idempotencyKeys;
     private final NotificationProperties properties;
     private final JsonMapper jsonMapper;
+    private final MeterRegistry registry;
+    private final TransactionTemplate tx;
     private final Clock clock;
 
     public NotificationService(NotificationRepository notifications, OutboxRepository outbox,
                                IdempotencyKeyRepository idempotencyKeys, NotificationProperties properties,
-                               JsonMapper jsonMapper, Clock clock) {
+                               JsonMapper jsonMapper, MeterRegistry registry, TransactionTemplate tx, Clock clock) {
         this.notifications = notifications;
         this.outbox = outbox;
         this.idempotencyKeys = idempotencyKeys;
         this.properties = properties;
         this.jsonMapper = jsonMapper;
+        this.registry = registry;
+        this.tx = tx;
         this.clock = clock;
     }
 
@@ -44,11 +61,30 @@ public class NotificationService {
      * <p>With an idempotency key, a repeated request returns the notification the first one
      * created instead of creating another.
      *
+     * <p>It is logged and counted only after the transaction commits, so a failed commit is not
+     * reported as accepted.
+     *
      * @param key the client's idempotency key, or null
      * @throws IdempotencyKeyReusedException if the key was used before with a different body
      */
-    @Transactional
     public CreateResult create(CreateNotificationRequest request, IdempotencyKey key) {
+        CreateResult result = tx.execute(status -> store(request, key));
+        Notification notification = result.notification();
+        try (MDC.MDCCloseable ignored = MDC.putCloseable(NOTIFICATION_ID, notification.id().toString())) {
+            log.info("{} {} notification {} for user {}", result.replayed() ? "Replayed" : "Accepted",
+                    notification.channel(), notification.id(), notification.userId());
+        }
+        Counter.builder(REQUESTS)
+                .description("Notifications accepted by the API, and repeats answered from an idempotency key")
+                .tag("channel", notification.channel().name())
+                .tag("priority", notification.priority().name())
+                .tag("result", result.replayed() ? "replayed" : "created")
+                .register(registry)
+                .increment();
+        return result;
+    }
+
+    private CreateResult store(CreateNotificationRequest request, IdempotencyKey key) {
         Notification notification = Notification.queued(request, clock.instant());
         if (key != null) {
             String hash = hash(request);

@@ -225,6 +225,26 @@ Client ──POST /notifications (Idempotency-Key)──► API ──► Postgr
   dead-letter topic, where marking it FAILED fails too, so the dead-letter handler keeps
   retrying. Replay recovers them afterwards. A blocking retry for database errors in front of the
   retry topics would avoid this; it is not built yet.
+- **Consumer lag is read from the broker, not from the workers.** Kafka clients do report their
+  own lag, but a dead worker reports nothing, so the dashboard would show lag falling to zero at
+  the moment it starts to grow. `kafka-exporter` reads each group's committed offsets from the
+  broker instead; with every worker killed under load, its lag kept rising and drained once a
+  worker came back. It reads end and committed offsets a moment apart, so a partition can show
+  -1; the dashboard clamps each partition at zero.
+- **The notification ID reaches every log line through a Kafka record interceptor.** Setting
+  the log context in the listeners would miss what Spring Kafka logs afterwards, when its error
+  handler publishes a failed record to a retry or dead-letter topic. The container calls the
+  interceptor's `afterRecord` only after the error handler, so those lines carry the ID too.
+  The interceptor parses the JSON a second time; next to the database round trips that is noise.
+- **End-to-end latency includes everything the user waits for.** It is measured from the API's
+  `createdAt` to the moment the worker marks the notification SENT, so retries, rate-limit slots
+  and quiet hours all count. That makes the p99 honest but means a quiet-hours deferral shows up
+  as a very slow notification; filter by priority or look at p50 to see the fast path. A
+  `le="0.2"` bucket gives the share sent within the 200 ms target directly.
+- **Backlog gauges are read on a schedule, not on scrape.** The outbox and deferred counts come
+  from Postgres every 5 seconds, so a slow database never slows `/actuator/prometheus`. When the
+  read fails the gauges report NaN, a gap on the dashboard, instead of a stale number that looks
+  healthy.
 - **The outbox grows forever.** Published rows are never deleted. The partial index keeps polling
   fast, but a retention job should delete rows published more than a few days ago.
 

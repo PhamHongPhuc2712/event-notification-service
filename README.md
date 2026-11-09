@@ -34,7 +34,7 @@ cp infra/.env.example infra/.env        # then edit the passwords
 # 2. Start infrastructure: Kafka, Postgres, Redis, Mailpit
 docker compose -f infra/docker-compose.yml up -d
 
-# Optional: also start Prometheus and Grafana
+# Optional: also start Prometheus, Grafana and the Kafka lag exporter
 docker compose -f infra/docker-compose.yml --profile observability up -d
 
 # 3. Build and test everything
@@ -159,6 +159,48 @@ it through the main topic again, and exits:
   -Dspring-boot.run.arguments=--topic=notifications.sms-dlt
 ```
 
+## Observability
+
+Start Prometheus, Grafana and the Kafka lag exporter with the `observability` profile (see Quick
+start), run the services, then open the **Notification service** dashboard in Grafana
+(http://localhost:3000, folder *Notification service*). It refreshes every 5 seconds and shows:
+
+| Row | What it answers |
+|---|---|
+| Overview | Accepted and sent per second, p99 end-to-end latency, share sent within 200 ms, consumer lag, dead letters |
+| Throughput | Accepted by channel and priority, every delivery outcome, sent by channel |
+| Latency | End-to-end p50/p95/p99, provider send time per channel, API response time |
+| Backlog | Consumer lag per group (from the broker, so it still rises when every worker is down), outbox, deferred |
+| Retries and errors | Retries, dead letters, failed and suppressed, error log lines, API 5xx, rate-limiter decisions |
+| Services | Which services Prometheus can scrape, JVM heap |
+
+The dashboard is provisioned from `infra/grafana/dashboards/notification-service.json`; edit
+that file, since changes made in the Grafana UI are not saved.
+
+The service's own metrics, all on `/actuator/prometheus`:
+
+| Metric | Labels | From |
+|---|---|---|
+| `notification_requests_total` | channel, priority, result (`created`, `replayed`) | api |
+| `notification_outbox_published_total`, `notification_outbox_publish_failures_total` | | api |
+| `notification_outbox_backlog`, `notification_outbox_oldest_age_seconds`, `notification_deferred_backlog` | | api |
+| `notification_deliveries_total` | channel, priority, outcome (`sent`, `failed`, `suppressed`, `deferred`, `skipped_*`, `retry`, `error`) | worker |
+| `notification_delivery_latency_seconds` (histogram) | channel, priority | worker |
+| `notification_send_seconds` (histogram) | channel, result | worker |
+| `notification_dead_letters_total` | topic | worker |
+| `notification_rate_limit_decisions_total` | channel, priority, decision (`now`, `later`, `rejected`, `unavailable`) | worker |
+
+**Logs** are JSON, one object per line in the Elastic Common Schema. Every line logged while a
+notification is handled carries its `notificationId`, including Spring Kafka's own lines about
+retries, so one ID finds the whole story:
+
+```bash
+grep '"notificationId":"<id>"' worker.log | jq -r '[."@timestamp", .log.level, .message] | @tsv'
+```
+
+For readable text in a terminal, set `LOG_FORMAT` to an empty value:
+`LOG_FORMAT= ./mvnw -pl worker spring-boot:run`.
+
 ## Tests
 
 ```bash
@@ -180,7 +222,8 @@ bash scripts/smoke-test.sh
 | Mailpit inbox | http://localhost:8025 |
 | Mock SMS stats | http://localhost:8082/v1/messages/stats |
 | Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3000 |
+| Grafana | http://localhost:3000 (dashboard: *Notification service*) |
+| API metrics | http://localhost:8080/actuator/prometheus |
 
 ## Stopping
 

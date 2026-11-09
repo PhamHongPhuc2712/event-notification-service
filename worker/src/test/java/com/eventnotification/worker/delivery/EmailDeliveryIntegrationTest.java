@@ -3,8 +3,11 @@ package com.eventnotification.worker.delivery;
 import com.eventnotification.worker.TestcontainersConfiguration;
 import com.eventnotification.worker.TopicReader;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -36,6 +39,7 @@ import static org.awaitility.Awaitility.await;
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 @ActiveProfiles("test")
+@ExtendWith(OutputCaptureExtension.class)
 class EmailDeliveryIntegrationTest {
 
     private static final String EMAIL_TOPIC = "notifications.email";
@@ -70,6 +74,28 @@ class EmailDeliveryIntegrationTest {
         assertThat(jdbc.sql("SELECT sent_at IS NOT NULL FROM notifications WHERE id = :id")
                 .param("id", id).query(Boolean.class).single()).isTrue();
         await().atMost(TIMEOUT).until(() -> mailpitSubjects().contains(subject));
+    }
+
+    @Test
+    void logsEveryLineAboutTheNotificationAsJsonCarryingItsId(CapturedOutput output) throws Exception {
+        String userId = uniqueUserId();
+        String subject = "Logged " + UUID.randomUUID();
+        UUID id = insertNotification(userId, subject, "QUEUED");
+
+        publish(userId, message(id, userId, subject));
+
+        String sent = "Sent EMAIL notification " + id;
+        await().atMost(TIMEOUT).until(() -> output.getOut().contains(sent));
+        List<JsonNode> lines = output.getOut().lines()
+                .filter(line -> line.contains(id.toString()))
+                .map(jsonMapper::readTree)
+                .toList();
+        assertThat(lines).isNotEmpty().allSatisfy(line ->
+                assertThat(line.path("notificationId").asString()).isEqualTo(id.toString()));
+        assertThat(lines).anySatisfy(line -> {
+            assertThat(line.path("message").asString()).startsWith(sent);
+            assertThat(line.path("service").path("name").asString()).isEqualTo("worker");
+        });
     }
 
     @Test
