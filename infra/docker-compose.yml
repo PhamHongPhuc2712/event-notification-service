@@ -148,6 +148,65 @@ services:
     # 256m was killed for memory while the notification dashboard refreshed every 5s.
     mem_limit: 512m
 
+  # The services themselves, built from the Dockerfile at the repository root. For a one-command
+  # start: bash scripts/quickstart.sh. During development, run them with ./mvnw instead.
+  api:
+    build: { context: .., args: { MODULE: api } }
+    image: event-notification-service/api:local
+    container_name: ens-api
+    profiles: ["app"]
+    ports:
+      - "8080:8080"
+    environment: &service-env
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      REDIS_HOST: redis
+      MAIL_HOST: mailpit
+      MOCK_SMS_URL: http://mock-sms:8082
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-}
+    depends_on:
+      kafka: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    healthcheck: &service-health
+      # The JRE image has bash but no curl: ask the health endpoint over a raw socket.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/$${SERVER_PORT:-8080} && printf 'GET /actuator/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    mem_limit: 768m
+
+  worker:
+    build: { context: .., args: { MODULE: worker } }
+    image: event-notification-service/worker:local
+    container_name: ens-worker
+    profiles: ["app"]
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8081
+    depends_on:
+      api: { condition: service_healthy }   # the api applies the database migrations
+      redis: { condition: service_healthy }
+    healthcheck: *service-health
+    mem_limit: 768m
+
+  mock-sms:
+    build: { context: .., args: { MODULE: mock-sms } }
+    image: event-notification-service/mock-sms:local
+    container_name: ens-mock-sms
+    profiles: ["app"]
+    ports:
+      - "8082:8082"
+    environment:
+      SERVER_PORT: 8082
+    healthcheck: *service-health
+    mem_limit: 384m
+
 volumes:
   kafka-data:
   postgres-data:

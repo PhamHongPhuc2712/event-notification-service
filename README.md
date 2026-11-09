@@ -4,14 +4,50 @@ A multi-channel notification service. Other applications ask it to notify a user
 the channel, respects user preferences and rate limits, and delivers every notification
 exactly once from the user's point of view, even when workers, the broker, or providers fail.
 
-> **Status:** email and SMS flow end to end through the outbox, Kafka and the workers, with
-> idempotency keys, retry topics, a dead-letter topic with replay, and a chaos test that kills
-> workers mid-run and loses or duplicates nothing. See [docs/DESIGN.md](docs/DESIGN.md) for the design.
+It runs on one laptop at **about 430 notifications a second** with zero lost or duplicated
+across 1.16 million load-tested notifications, and **loses nothing** while workers, Kafka and the
+API are killed under load. See [docs/RESULTS.md](docs/RESULTS.md) for the measurements and
+[docs/DESIGN.md](docs/DESIGN.md) for how it gets there.
+
+| | Result |
+|---|---|
+| Sustained throughput (single laptop, bound by the disk's WAL flush rate) | about 430 a second |
+| End-to-end latency at 200 a second, p50 / p95 / p99 | 156 ms / 244 ms / 1.1 s |
+| Lost or duplicated in 31 load-test runs (1,157,379 notifications) | 0 |
+| Chaos run: 2 workers and the API killed, Kafka restarted, 200 ms network latency | 0 lost, 2 duplicate emails* |
+
+\* A worker killed between the SMTP send and recording it; SMTP has no idempotency key. SMS has
+no such window: the provider accepts each notification ID once.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    client([Client app]) -- "POST /notifications<br/>Idempotency-Key" --> api[API]
+    api -- "one transaction:<br/>notification + outbox row" --> pg[(PostgreSQL)]
+    api -. "outbox publisher" .-> kafka{{"Kafka<br/>partitioned by user ID<br/>normal + HIGH topics"}}
+    kafka --> worker[Workers]
+    worker -- "claim, then record status" --> pg
+    worker -- "per-user token bucket" --> redis[(Redis)]
+    worker -- "transient failure" --> retry{{"retry topics<br/>jittered backoff"}}
+    retry --> worker
+    retry -- "out of retries" --> dlt{{"dead-letter topic"}}
+    dlt -. "replay tool" .-> kafka
+    worker --> mail[Mailpit<br/>email]
+    worker --> sms[Mock SMS<br/>Idempotency-Key]
+    worker --> hook[Webhooks<br/>HMAC-signed]
+    api & worker -. metrics .-> prom[Prometheus] --> grafana[Grafana]
+```
+
+The API writes each notification and an outbox row in one transaction, so a notification is
+published if and only if it was stored. Kafka delivers at least once; a worker claims a
+notification in Postgres before sending it, so a redelivered or rebalanced message is never sent
+twice. User preferences, quiet hours and per-user rate limits are applied at delivery time.
 
 ## Stack
 
 Java 21 · Spring Boot 4.1 · Kafka 4.3 (KRaft) · PostgreSQL 16 · Redis 7 · Docker Compose ·
-Prometheus · Grafana · JUnit 5 · Testcontainers · k6
+Prometheus · Grafana · JUnit 5 · Testcontainers · k6 · Toxiproxy
 
 ## Modules
 
@@ -21,15 +57,28 @@ Prometheus · Grafana · JUnit 5 · Testcontainers · k6
 | `worker` | 8081 | Kafka consumers that claim, deliver and retry; also the dead-letter replay tool |
 | `mock-sms` | 8082 | Fake SMS provider that injects timeouts, errors and slow responses |
 | `chaos-test` | — | Kills workers and the API mid-run; checks nothing is lost or sent twice |
-| `infra` | — | Docker Compose stack, Prometheus and Grafana config |
+| `loadtest` | — | k6 load test, the delivery verifier and the chaos run |
+| `infra` | — | Docker Compose stack, Prometheus, Grafana and Toxiproxy config |
 
 ## Quick start
 
-Prerequisites: Java 21 and Docker Desktop.
+Prerequisites: Docker. One command builds the services and starts everything, creating
+`infra/.env` with random passwords on the first run:
 
 ```bash
-# 1. Configure local secrets (once)
-cp infra/.env.example infra/.env        # then edit the passwords
+bash scripts/quickstart.sh          # stop with: bash scripts/quickstart.sh down
+```
+
+Then open the Grafana dashboard at http://localhost:3000 and the Mailpit inbox at
+http://localhost:8025, and send a notification (below).
+
+## Development setup
+
+Prerequisites: Java 21 and Docker. Run the infrastructure in Docker and the services with Maven:
+
+```bash
+# 1. Configure local secrets (once); or run scripts/quickstart.sh once, which writes it
+cp infra/.env.example infra/.env        # then set the passwords and the webhook secret
 
 # 2. Start infrastructure: Kafka, Postgres, Redis, Mailpit
 docker compose -f infra/docker-compose.yml up -d
@@ -48,13 +97,12 @@ docker compose -f infra/docker-compose.yml --profile observability up -d
 
 On Windows PowerShell, use `.\mvnw.cmd` instead of `./mvnw`.
 
-## Python helper scripts
-
-Python is only used for helper scripts such as the load-test verifier.
+Python is only used for the load-test verifier:
 
 ```bash
 python -m venv .venv                      # once
-source .venv/Scripts/activate             # Git Bash
+source .venv/bin/activate                 # Linux, macOS, WSL
+source .venv/Scripts/activate             # Git Bash on Windows
 .venv\Scripts\Activate.ps1                # PowerShell
 pip install -r requirements.txt
 ```
@@ -213,6 +261,18 @@ End-to-end smoke test, with infrastructure, `api` and `worker` running:
 ```bash
 bash scripts/smoke-test.sh
 ```
+
+## Load and chaos tests
+
+```bash
+RATE=400 DURATION=90s bash loadtest/run.sh      # load test, then verify every delivery
+RATE=300 DURATION=150s bash loadtest/chaos.sh   # the same while things are killed and slowed
+```
+
+`run.sh` needs the services and the observability profile running; `chaos.sh` starts its own
+services behind Toxiproxy (`--profile chaos`). Both end with a table of throughput, latency,
+consumer lag, and lost and duplicated counts. See [loadtest/README.md](loadtest/README.md) and
+the results in [docs/RESULTS.md](docs/RESULTS.md).
 
 ## Local URLs
 
