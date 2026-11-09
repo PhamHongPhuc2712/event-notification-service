@@ -38,6 +38,17 @@ notifications:
   deferred:
     poll-interval: 5s
     batch-size: 500
+  metrics:
+    # How often the backlog gauges re-read the outbox and deferred counts from the database.
+    backlog-refresh-interval: 5s
+
+logging:
+  structured:
+    format:
+      # One JSON object per line (Elastic Common Schema), ready for a log store. Every entry in
+      # the log context becomes a field, such as notificationId. Set LOG_FORMAT to an empty
+      # value for readable text in a terminal: LOG_FORMAT= ./mvnw -pl <module> spring-boot:run
+      console: ${LOG_FORMAT:ecs}
 
 management:
   endpoints:
@@ -51,3 +62,7 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      # Histogram buckets, so the dashboard can show API response-time percentiles across instances.
+      percentiles-histogram:
+        http.server.requests: true

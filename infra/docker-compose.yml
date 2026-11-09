@@ -89,6 +89,19 @@ services:
       - "host.docker.internal:host-gateway"
     mem_limit: 384m
 
+  # Consumer-group lag measured on the broker, for the dashboard. Clients cannot report their
+  # own lag once they are dead, which is exactly when it matters.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: ens-kafka-exporter
+    profiles: ["observability"]
+    command: ["--kafka.server=kafka:19092", "--kafka.version=3.9.0"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 64m
+
   grafana:
     image: grafana/grafana:13.2.5
     container_name: ens-grafana
@@ -100,10 +113,12 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in infra/.env}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
-    mem_limit: 256m
+    # 256m was killed for memory while the notification dashboard refreshed every 5s.
+    mem_limit: 512m
 
 volumes:
   kafka-data:

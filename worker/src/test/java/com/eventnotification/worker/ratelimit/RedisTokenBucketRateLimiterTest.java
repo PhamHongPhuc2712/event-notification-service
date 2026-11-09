@@ -4,6 +4,7 @@ import com.eventnotification.worker.TestcontainersConfiguration;
 import com.eventnotification.worker.config.WorkerProperties;
 import com.eventnotification.worker.ratelimit.RateLimiter.Decision;
 import com.eventnotification.worker.ratelimit.RateLimiter.Outcome;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -39,6 +40,8 @@ class RedisTokenBucketRateLimiterTest {
 
     @Autowired
     private StringRedisTemplate redis;
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @Test
     void allowsABurstUpToCapacityThenReservesSlotsAtTheRefillRate() {
@@ -107,7 +110,8 @@ class RedisTokenBucketRateLimiterTest {
     @Test
     void channelWithoutABucketIsUnlimited() {
         RateLimiter limiter = new RedisTokenBucketRateLimiter(redis, new WorkerProperties.RateLimit(true,
-                Duration.ZERO, Map.of("SMS", new WorkerProperties.Bucket(1, Duration.ofHours(1))), Map.of()));
+                Duration.ZERO, Map.of("SMS", new WorkerProperties.Bucket(1, Duration.ofHours(1))), Map.of()),
+                registry);
         String user = uniqueUser();
 
         for (int i = 0; i < 10; i++) {
@@ -178,16 +182,39 @@ class RedisTokenBucketRateLimiterTest {
         deadRedis.start();
         try {
             RateLimiter limiter = new RedisTokenBucketRateLimiter(new StringRedisTemplate(deadRedis),
-                    properties(1, Duration.ofHours(1), Duration.ZERO));
+                    properties(1, Duration.ofHours(1), Duration.ZERO), registry);
 
             assertThat(limiter.acquire(uniqueUser(), "SMS")).isEqualTo(Decision.NOW);
+            assertThat(decisions("SMS", "NORMAL", "unavailable")).isEqualTo(1.0);
         } finally {
             deadRedis.destroy();
         }
     }
 
+    @Test
+    void countsEachDecisionByChannelPriorityAndResult() {
+        RateLimiter limiter = limiter(1, Duration.ofSeconds(1), Duration.ofMillis(2_500));
+        String user = uniqueUser();
+
+        limiter.acquire(user, "SMS");                 // the one token
+        limiter.acquire(user, "SMS");                 // slot in 1s
+        limiter.acquire(user, "SMS");                 // slot in 2s
+        limiter.acquire(user, "SMS");                 // 3s away, beyond the 2.5s max wait
+        limiter.acquire(user, "SMS", true);           // its own HIGH bucket
+
+        assertThat(decisions("SMS", "NORMAL", "now")).isEqualTo(1.0);
+        assertThat(decisions("SMS", "NORMAL", "later")).isEqualTo(2.0);
+        assertThat(decisions("SMS", "NORMAL", "rejected")).isEqualTo(1.0);
+        assertThat(decisions("SMS", "HIGH", "now")).isEqualTo(1.0);
+    }
+
+    private double decisions(String channel, String priority, String decision) {
+        return registry.get(RedisTokenBucketRateLimiter.DECISIONS)
+                .tags("channel", channel, "priority", priority, "decision", decision).counter().count();
+    }
+
     private RateLimiter limiter(int capacity, Duration refill, Duration maxWait) {
-        return new RedisTokenBucketRateLimiter(redis, properties(capacity, refill, maxWait));
+        return new RedisTokenBucketRateLimiter(redis, properties(capacity, refill, maxWait), registry);
     }
 
     private static WorkerProperties.RateLimit properties(int capacity, Duration refill, Duration maxWait) {

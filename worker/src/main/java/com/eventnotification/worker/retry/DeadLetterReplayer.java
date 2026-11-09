@@ -3,6 +3,7 @@ package com.eventnotification.worker.retry;
 import com.eventnotification.worker.delivery.MessageParser;
 import com.eventnotification.worker.delivery.NotificationMessage;
 import com.eventnotification.worker.delivery.NotificationStatusRepository;
+import com.eventnotification.worker.logging.NotificationLogContext;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -11,6 +12,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
@@ -107,14 +109,19 @@ public class DeadLetterReplayer {
             log.warn("Skipping malformed dead letter at {}-{}@{}", record.topic(), record.partition(), record.offset());
             return false;
         }
-        statuses.requeueExhausted(message.get().notificationId(), clock.instant());
-        try {
-            kafka.send(mainTopic, record.key(), record.value()).get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while replaying " + message.get().notificationId(), e);
-        } catch (ExecutionException | TimeoutException e) {
-            throw new IllegalStateException("Could not replay notification " + message.get().notificationId(), e);
+        // The log context covers the catch blocks too, so a failure is logged with the ID.
+        try (MDC.MDCCloseable ignored = NotificationLogContext.put(message.get().notificationId())) {
+            try {
+                statuses.requeueExhausted(message.get().notificationId(), clock.instant());
+                kafka.send(mainTopic, record.key(), record.value()).get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                log.info("Replayed notification {} into {}", message.get().notificationId(), mainTopic);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while replaying " + message.get().notificationId(), e);
+            } catch (ExecutionException | TimeoutException e) {
+                log.error("Could not replay notification {} into {}", message.get().notificationId(), mainTopic, e);
+                throw new IllegalStateException("Could not replay notification " + message.get().notificationId(), e);
+            }
         }
         return true;
     }

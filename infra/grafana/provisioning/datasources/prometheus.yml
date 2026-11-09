@@ -1,6 +1,14 @@
 apiVersion: 1
+
+# Recreated on every start so it always has the uid below, including on a grafana-data volume
+# created before the uid was set (Grafana refuses to change the uid of an existing datasource).
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
 datasources:
   - name: Prometheus
+    uid: prometheus   # the provisioned dashboards refer to it by this uid
     type: prometheus
     access: proxy
     url: http://prometheus:9090

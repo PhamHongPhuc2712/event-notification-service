@@ -9,3 +9,9 @@ scrape_configs:
           - host.docker.internal:8080   # api
           - host.docker.internal:8081   # worker
           - host.docker.internal:8082   # mock-sms
+
+  # Consumer-group lag, read from the broker, so it is still reported when every worker is down.
+  - job_name: kafka
+    static_configs:
+      - targets:
+          - kafka-exporter:9308

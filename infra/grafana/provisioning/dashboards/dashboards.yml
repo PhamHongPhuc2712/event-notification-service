@@ -1,0 +1,11 @@
+# Loads the dashboards in infra/grafana/dashboards on startup. Edit the JSON files, not the UI:
+# changes made in Grafana are not saved back to the repository.
+apiVersion: 1
+providers:
+  - name: notification-service
+    folder: Notification service
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

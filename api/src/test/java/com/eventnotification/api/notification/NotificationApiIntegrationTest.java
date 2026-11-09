@@ -2,15 +2,20 @@ package com.eventnotification.api.notification;
 
 import com.eventnotification.api.TestcontainersConfiguration;
 import com.eventnotification.api.idempotency.IdempotencyKey;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
@@ -49,6 +54,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 @ActiveProfiles("test")
+@ExtendWith(OutputCaptureExtension.class)
 class NotificationApiIntegrationTest {
 
     private static final String EMAIL_TOPIC = "notifications.email";
@@ -68,6 +74,9 @@ class NotificationApiIntegrationTest {
 
     @Autowired
     private NotificationService service;
+
+    @Autowired
+    private MeterRegistry registry;
 
     @Test
     void createReturnsAcceptedWithLocationAndQueuedStatus() throws Exception {
@@ -366,6 +375,38 @@ class NotificationApiIntegrationTest {
             assertThat(created).filteredOn(r -> !r.replayed()).hasSize(1);
         }
         assertThat(countFor(userId, "notifications", "user_id")).isEqualTo(1);
+    }
+
+    @Test
+    void countsCreatedAndReplayedRequestsByChannelAndPriority() throws Exception {
+        double created = requests("EMAIL", "created");
+        double replayed = requests("EMAIL", "replayed");
+        String body = emailRequest(uniqueUserId(), "Counted");
+        String key = "counted-" + UUID.randomUUID();
+
+        postWithKey(body, key).andExpect(status().isAccepted());
+        postWithKey(body, key).andExpect(status().isAccepted());
+
+        assertThat(requests("EMAIL", "created")).isEqualTo(created + 1);
+        assertThat(requests("EMAIL", "replayed")).isEqualTo(replayed + 1);
+    }
+
+    @Test
+    void logsTheAcceptedNotificationAsJsonWithItsId(CapturedOutput output) throws Exception {
+        UUID id = createEmail(uniqueUserId(), "Logged");
+
+        JsonNode line = jsonMapper.readTree(output.getOut().lines()
+                .filter(l -> l.contains("Accepted EMAIL notification " + id))
+                .findFirst()
+                .orElseThrow());
+        assertThat(line.path("notificationId").asString()).isEqualTo(id.toString());
+        assertThat(line.path("service").path("name").asString()).isEqualTo("api");
+    }
+
+    private double requests(String channel, String result) {
+        Counter counter = registry.find(NotificationService.REQUESTS)
+                .tags("channel", channel, "priority", "NORMAL", "result", result).counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private ResultActions postWithKey(String body, String key)

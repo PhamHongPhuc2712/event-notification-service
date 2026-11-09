@@ -1,6 +1,7 @@
 package com.eventnotification.api.outbox;
 
 import com.eventnotification.api.config.NotificationProperties;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ class OutboxPublisherTest {
     @SuppressWarnings("unchecked")
     private final KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
     private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     private OutboxPublisher publisher;
 
@@ -44,7 +46,7 @@ class OutboxPublisherTest {
                 new NotificationProperties.Topics("notifications.email", "notifications.sms", "notifications.webhook", 6),
                 new NotificationProperties.Outbox(Duration.ofMillis(200), 100, Duration.ofSeconds(1)),
                 new NotificationProperties.Deferred(Duration.ofSeconds(1), 100));
-        publisher = new OutboxPublisher(outbox, kafka, new TransactionTemplate(txManager), properties,
+        publisher = new OutboxPublisher(outbox, kafka, new TransactionTemplate(txManager), properties, registry,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -59,6 +61,7 @@ class OutboxPublisherTest {
         verify(kafka).send("notifications.email", "user-1", "{\"n\":1}");
         verify(kafka).send("notifications.email", "user-2", "{\"n\":2}");
         verify(outbox).markPublished(List.of(1L, 2L), NOW);
+        assertThat(registry.get(OutboxPublisher.PUBLISHED).counter().count()).isEqualTo(2.0);
     }
 
     @Test
@@ -74,6 +77,18 @@ class OutboxPublisherTest {
 
         verify(outbox, never()).markPublished(any(), any());
         verify(txManager).rollback(any());
+    }
+
+    @Test
+    void countsBatchesThatFailedToPublish() {
+        when(outbox.lockUnpublished(100)).thenReturn(List.of(event(1)));
+        when(kafka.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.failedFuture(new TimeoutException("broker unavailable")));
+
+        publisher.poll();
+
+        assertThat(registry.get(OutboxPublisher.PUBLISH_FAILURES).counter().count()).isEqualTo(1.0);
+        assertThat(registry.get(OutboxPublisher.PUBLISHED).counter().count()).isZero();
     }
 
     @Test

@@ -115,10 +115,12 @@ Aim for these, then report what you actually measure.
 - **Done when:** every feature has tests, including concurrent tests for the rate limiter
 
 ## Week 6: observability
-- [ ] Export metrics with Micrometer to Prometheus
-- [ ] Grafana dashboard: consumer lag, delivery latency, retries, dead letters, errors
-- [ ] Structured JSON logs with a notification ID on every line
+- [x] Export metrics with Micrometer to Prometheus
+- [x] Grafana dashboard: consumer lag, delivery latency, retries, dead letters, errors
+- [x] Structured JSON logs with a notification ID on every line
 - **Done when:** you can watch a load test happen live on the dashboard
+  — done: dashboard *Notification service* in Grafana; see [README](../README.md#observability).
+  The k6 load test itself comes in Week 7.
 
 ## Week 7: load and chaos testing
 - [ ] k6 load test; find the bottleneck, fix it, measure again
