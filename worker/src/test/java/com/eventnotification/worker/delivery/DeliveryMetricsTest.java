@@ -50,8 +50,7 @@ class DeliveryMetricsTest {
     @BeforeEach
     void queuedAndClaimable() {
         when(rateLimiter.acquire(anyString(), anyString(), anyBoolean())).thenReturn(RateLimiter.Decision.NOW);
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("QUEUED"));
-        when(claims.tryClaim(eq(message.notificationId()), anyString(), any())).thenReturn(true);
+        givenClaim("QUEUED");
     }
 
     @Test
@@ -109,7 +108,8 @@ class DeliveryMetricsTest {
 
     @Test
     void countsAnUnexpectedErrorSeparatelyFromProviderRetries() {
-        when(statuses.findStatus(message.notificationId())).thenThrow(new IllegalStateException("database down"));
+        when(claims.claim(eq(message.notificationId()), anyString(), any()))
+                .thenThrow(new IllegalStateException("database down"));
 
         assertThatThrownBy(() -> service.deliver(message, sender)).isInstanceOf(IllegalStateException.class);
 
@@ -118,7 +118,7 @@ class DeliveryMetricsTest {
 
     @Test
     void countsSkippedRedeliveries() {
-        when(statuses.findStatus(message.notificationId())).thenReturn(Optional.of("SENT"));
+        givenClaim("SENT");
 
         service.deliver(message, sender);
 
@@ -137,6 +137,11 @@ class DeliveryMetricsTest {
                 .isEqualTo(1.0);
         // No creation time, so no latency to record.
         assertThat(registry.find(DeliveryMetrics.LATENCY).timer()).isNull();
+    }
+
+    private void givenClaim(String status) {
+        when(claims.claim(eq(message.notificationId()), anyString(), any()))
+                .thenReturn(Optional.of(new DeliveryClaimRepository.Claim(true, status, false)));
     }
 
     private double deliveries(String outcome) {

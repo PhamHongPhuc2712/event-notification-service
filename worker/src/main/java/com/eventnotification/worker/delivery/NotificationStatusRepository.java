@@ -5,7 +5,6 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -15,13 +14,6 @@ public class NotificationStatusRepository {
 
     public NotificationStatusRepository(JdbcClient jdbc) {
         this.jdbc = jdbc;
-    }
-
-    public Optional<String> findStatus(UUID id) {
-        return jdbc.sql("SELECT status FROM notifications WHERE id = :id")
-                .param("id", id)
-                .query(String.class)
-                .optional();
     }
 
     /** Moves QUEUED to SENT. Returns false if the notification was not QUEUED. */
@@ -63,15 +55,6 @@ public class NotificationStatusRepository {
                 .param("reason", reason)
                 .param("now", Timestamp.from(now))
                 .update() == 1;
-    }
-
-    /** True if a rate-limit slot was already taken for this notification, so it must not take another. */
-    public boolean hasRateLimitSlot(UUID id) {
-        return jdbc.sql("SELECT rate_limit_reserved FROM notifications WHERE id = :id")
-                .param("id", id)
-                .query(Boolean.class)
-                .optional()
-                .orElse(false);
     }
 
     /** Records that this notification holds a rate-limit slot, for example before a send is retried. */

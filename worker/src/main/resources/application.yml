@@ -8,6 +8,10 @@ spring:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:notifications}
     username: ${POSTGRES_USER:notifications}
     password: ${POSTGRES_PASSWORD}
+    hikari:
+      # Enough for every consumer thread (6 per topic, plus HIGH-priority and retry topics) to
+      # hold a connection at once; the default of 10 made threads queue for one.
+      maximum-pool-size: 40
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -56,7 +60,9 @@ notifications:
     email-group: email-worker
     sms-group: sms-worker
     webhook-group: webhook-worker
-    concurrency: 3
+    # One consumer thread per partition. With 3 for 6 partitions, the workers fell behind at
+    # 264 notifications a second in the load test; see docs/RESULTS.md.
+    concurrency: 6
     high-priority-concurrency: 2
   mail:
     from: no-reply@event-notification.local

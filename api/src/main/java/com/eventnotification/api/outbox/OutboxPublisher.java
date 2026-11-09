@@ -58,10 +58,17 @@ public class OutboxPublisher {
         this.clock = clock;
     }
 
+    /**
+     * Publishes batches back to back while they come back full, and waits for the next poll only
+     * once the outbox is nearly empty. With one batch per poll, throughput was capped at
+     * batch size / poll interval (500 a second), and under load the backlog grew without bound.
+     */
     @Scheduled(fixedDelayString = "${notifications.outbox.poll-interval}")
     void poll() {
         try {
-            publishBatch();
+            while (publishBatch() == config.batchSize()) {
+                // A full batch: more rows are probably waiting.
+            }
         } catch (OutboxPublishException e) {
             publishFailures.increment();
             log.warn("Outbox batch not published, will retry on next poll: {}", e.getMessage(), e.getCause());

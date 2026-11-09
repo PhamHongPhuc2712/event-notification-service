@@ -72,21 +72,23 @@ public class DeliveryService {
 
     private DeliveryOutcome attempt(NotificationMessage message, ChannelSender sender) {
         UUID id = message.notificationId();
-        // Cheap check first, so redelivered messages for finished notifications skip the claim.
-        Optional<DeliveryOutcome> skip = skipReason(id);
-        if (skip.isPresent()) {
-            return skip.get();
+        // One round trip: claim, and read the status and rate-limit slot with it.
+        Optional<DeliveryClaimRepository.Claim> claim = claims.claim(id, workerId, claimLease);
+        if (claim.isEmpty()) {
+            log.warn("Skipping unknown notification {}", id);
+            return DeliveryOutcome.SKIPPED_UNKNOWN;
         }
-
-        if (!claims.tryClaim(id, workerId, claimLease)) {
+        // Checked whether or not we won the claim: a redelivered message for a finished
+        // notification is settled here, and the previous claimant may have finished just
+        // before its lease expired.
+        if (!"QUEUED".equals(claim.get().status())) {
+            log.info("Skipping notification {} already in status {}", id, claim.get().status());
+            return DeliveryOutcome.SKIPPED_ALREADY_PROCESSED;
+        }
+        if (!claim.get().claimed()) {
             // Never acknowledge a message we did not settle: if the claimant has crashed, a
             // retry after its lease expires takes the notification over.
             throw new TransientDeliveryException("Notification " + id + " is claimed by another worker", null);
-        }
-        // Check again: the previous claimant may have finished just before its lease expired.
-        skip = skipReason(id);
-        if (skip.isPresent()) {
-            return skip.get();
         }
         // Only after claiming: otherwise one worker could defer a notification another is sending.
         Optional<DeliveryOutcome> held = applyPreferences(message);
@@ -95,7 +97,7 @@ public class DeliveryService {
         }
         // After the preferences, so a notification held for quiet hours does not use up a token.
         boolean tookToken = false;
-        if (!statuses.hasRateLimitSlot(id)) {
+        if (!claim.get().rateLimitReserved()) {
             RateLimiter.Decision decision = rateLimiter.acquire(message.userId(), message.channel(),
                     message.isHighPriority());
             held = applyRateLimit(message, decision);
@@ -204,18 +206,5 @@ public class DeliveryService {
         } catch (RuntimeException e) {
             log.warn("Could not release claim on notification {}; it expires after {}", id, claimLease, e);
         }
-    }
-
-    private Optional<DeliveryOutcome> skipReason(UUID id) {
-        Optional<String> status = statuses.findStatus(id);
-        if (status.isEmpty()) {
-            log.warn("Skipping unknown notification {}", id);
-            return Optional.of(DeliveryOutcome.SKIPPED_UNKNOWN);
-        }
-        if (!"QUEUED".equals(status.get())) {
-            log.info("Skipping notification {} already in status {}", id, status.get());
-            return Optional.of(DeliveryOutcome.SKIPPED_ALREADY_PROCESSED);
-        }
-        return Optional.empty();
     }
 }
