@@ -232,6 +232,7 @@ The service's own metrics, all on `/actuator/prometheus`:
 |---|---|---|
 | `notification_requests_total` | channel, priority, result (`created`, `replayed`) | api |
 | `notification_outbox_published_total`, `notification_outbox_publish_failures_total` | | api |
+| `notification_outbox_deleted_total`, `notification_outbox_cleanup_failures_total` | | api |
 | `notification_outbox_backlog`, `notification_outbox_oldest_age_seconds`, `notification_deferred_backlog` | | api |
 | `notification_deliveries_total` | channel, priority, outcome (`sent`, `failed`, `suppressed`, `deferred`, `skipped_*`, `retry`, `error`) | worker |
 | `notification_delivery_latency_seconds` (histogram) | channel, priority | worker |

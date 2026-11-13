@@ -18,7 +18,19 @@ public record NotificationProperties(@Valid @NotNull Topics topics, @Valid @NotN
                          @Min(1) int partitions) {
     }
 
-    public record Outbox(@NotNull Duration pollInterval, @Min(1) int batchSize, @NotNull Duration sendTimeout) {
+    public record Outbox(@NotNull Duration pollInterval, @Min(1) int batchSize, @NotNull Duration sendTimeout,
+                         @Valid @NotNull Cleanup cleanup) {
+
+        /**
+         * Deletes published rows once they are older than {@code retention}, so the table stays
+         * small. Unpublished rows are never deleted.
+         *
+         * @param interval  how often the cleanup runs
+         * @param retention how long a published row is kept, for looking up when it was published
+         * @param batchSize rows deleted per statement, so one delete never holds locks for long
+         */
+        public record Cleanup(@NotNull Duration interval, @NotNull Duration retention, @Min(1) int batchSize) {
+        }
     }
 
     /** How often, and how many at a time, DEFERRED notifications are released after quiet hours. */

@@ -136,7 +136,7 @@ as the system can make that true:
   fixed order): the same key with a different body is a client bug, answered with `422`.
   A replay returns the notification's current state rather than a stored copy of the first
   response, so it may say SENT where the first said QUEUED. Keys are never deleted yet; a
-  24-hour expiry job belongs with the outbox cleanup.
+  24-hour expiry job could work like the outbox cleanup.
 - **Workers claim a notification before sending it.** A status check alone is not race-proof:
   during a rebalance two consumers can both read QUEUED. So the worker first inserts a row into
   `delivery_claims`, keyed by notification ID, with `INSERT ... ON CONFLICT DO UPDATE ... WHERE`
@@ -307,8 +307,18 @@ as the system can make that true:
   from Postgres every 5 seconds, so a slow database never slows `/actuator/prometheus`. When the
   read fails the gauges report NaN, a gap on the dashboard, instead of a stale number that looks
   healthy.
-- **The outbox grows forever.** Published rows are never deleted. The partial index keeps polling
-  fast, but a retention job should delete rows published more than a few days ago.
+- **Published outbox rows are deleted after an hour.** At first they were kept forever. The
+  partial index kept polling fast, but after about 1.3 million notifications the load test
+  delivered 157 a second instead of 395 on the same setup with empty tables: the indexes no
+  longer fit in Postgres's 128 MB of shared buffers, so every insert read pages from disk and
+  wrote more to the WAL. `OutboxCleaner` now runs every minute and deletes rows published more
+  than an hour ago, 5,000 per statement. Ids grow with insertion, so the oldest published rows
+  are at the start of the primary key: one batch takes about 20 ms on a 1.3-million-row table
+  with no extra index. Unpublished rows are never deleted, however old, and `SKIP LOCKED` lets
+  several API instances clean without waiting on each other. An hour is enough to look up when a
+  row was published; the notification itself keeps its status. `notifications`,
+  `idempotency_keys` and `delivery_claims` still grow and need their own retention, decided by
+  how long a client may replay a key and how long notification history must be kept.
 
 ## Chaos test
 

@@ -75,6 +75,17 @@ Two things that did not help, kept out of the code: Postgres group commit (`comm
 which gave the same 426 a second in two repeat runs, and tuning that only moves load between
 the API and the workers.
 
+**Tables that only grow.** A later baseline run on the same setup delivered 157 a second
+instead of 395, with the API's p50 at 3 seconds. The disk was not slower (`pg_test_fsync`
+measured 657 flushes a second that day); the database was bigger. 31 earlier runs had left
+about 1.3 million rows in each of `outbox`, `notifications`, `idempotency_keys` and
+`delivery_claims`, 1.4 GB in all, and the outbox never deleted a published row. Once the
+indexes outgrew Postgres's 128 MB of shared buffers, each insert had to read index pages from
+disk and wrote more to the WAL. With the tables emptied, the same run delivered 395 a second
+again. The outbox now deletes rows an hour after publishing them (see
+[DESIGN.md](DESIGN.md)). The steps above were measured while the tables grew from run to run,
+so if anything they understate the later steps.
+
 ## Throughput and latency after tuning
 
 The project's default configuration, one worker, 90 seconds per run.

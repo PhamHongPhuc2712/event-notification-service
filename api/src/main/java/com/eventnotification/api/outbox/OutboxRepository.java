@@ -53,6 +53,27 @@ public class OutboxRepository {
                 .list();
     }
 
+    /**
+     * Deletes up to {@code limit} of the oldest rows published before {@code cutoff} and returns
+     * how many it deleted. Ids grow with insertion, so the oldest published rows are at the start
+     * of the primary key and no extra index is needed. SKIP LOCKED keeps cleaners on several API
+     * instances from waiting on each other.
+     */
+    public int deletePublishedBefore(Instant cutoff, int limit) {
+        return jdbc.sql("""
+                        DELETE FROM outbox
+                        WHERE id IN (
+                            SELECT id FROM outbox
+                            WHERE published_at < :cutoff
+                            ORDER BY id
+                            LIMIT :limit
+                            FOR UPDATE SKIP LOCKED)
+                        """)
+                .param("cutoff", Timestamp.from(cutoff))
+                .param("limit", limit)
+                .update();
+    }
+
     public void markPublished(List<Long> ids, Instant publishedAt) {
         jdbc.sql("UPDATE outbox SET published_at = :publishedAt WHERE id IN (:ids)")
                 .param("publishedAt", Timestamp.from(publishedAt))

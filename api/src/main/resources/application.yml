@@ -39,6 +39,12 @@ notifications:
     poll-interval: 200ms
     batch-size: 100
     send-timeout: 10s
+    # Published rows are deleted after the retention period. Kept forever, they slowed the
+    # load test from 395 to 157 notifications a second; see docs/RESULTS.md.
+    cleanup:
+      interval: 1m
+      retention: 1h
+      batch-size: 5000
   deferred:
     poll-interval: 5s
     batch-size: 500
